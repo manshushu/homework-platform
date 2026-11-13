@@ -120,14 +120,16 @@
               </label>
               <div class="dropzone" id="dropzone">
                 <div class="dropzone-icon">📎</div>
-                <div class="dropzone-text">点击选择文件，或将作业文件拖拽到此处</div>
-                <div class="dropzone-sub">支持任意格式文件 (.sb3, .py, .mp, .zip, .docx, .png 等)</div>
-                <input type="file" id="fileInput" name="file" required>
+                <div class="dropzone-text">点击选择文件，或将作业文件拖拽到此处（支持多选）</div>
+                <div class="dropzone-sub">支持任意格式文件 (.sb3, .py, .mp, .zip, .docx, .png 等)，可一次提交多个文件</div>
+                <input type="file" id="fileInput" name="files" multiple>
               </div>
-              <div id="fileInfo" style="display: none;" class="selected-file-badge">
-                <span>📄 已选文件:</span>
-                <span id="fileName" style="word-break: break-all;"></span>
-                <span id="fileSize" style="color: var(--text-muted); font-size: 12px;"></span>
+              <div id="fileInfo" style="display: none;" class="selected-file-list">
+                <div class="selected-file-header">
+                  <span id="fileCountLabel">📄 已选 0 个文件</span>
+                  <button type="button" class="btn-link-clear" id="btnClearFiles">清空重选</button>
+                </div>
+                <div id="fileListItems" class="selected-file-items"></div>
               </div>
             </div>
 

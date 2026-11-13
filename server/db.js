@@ -130,13 +130,43 @@ function initSchema() {
       ip_address TEXT DEFAULT '',
       submitted_at TEXT DEFAULT (datetime('now', 'localtime')),
       updated_at TEXT DEFAULT (datetime('now', 'localtime')),
-      UNIQUE(class_name, student_no)
+      UNIQUE(class_name, student_no, original_name)
     );
 
     CREATE INDEX IF NOT EXISTS idx_students_class ON students(class_name);
     CREATE INDEX IF NOT EXISTS idx_submissions_class ON submissions(class_name);
     CREATE INDEX IF NOT EXISTS idx_submissions_student ON submissions(class_name, student_no);
   `);
+
+  // Migrate legacy submissions table that enforced UNIQUE(class_name, student_no)
+  const tableRow = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='submissions'").get();
+  if (tableRow && tableRow.sql && !tableRow.sql.includes('original_name)')) {
+    db.exec(`
+      BEGIN TRANSACTION;
+      CREATE TABLE submissions_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        class_name TEXT NOT NULL,
+        student_no INTEGER NOT NULL,
+        student_name TEXT DEFAULT '',
+        note TEXT DEFAULT '',
+        original_name TEXT NOT NULL,
+        stored_name TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        file_size INTEGER NOT NULL,
+        ip_address TEXT DEFAULT '',
+        submitted_at TEXT DEFAULT (datetime('now', 'localtime')),
+        updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+        UNIQUE(class_name, student_no, original_name)
+      );
+      INSERT INTO submissions_new (id, class_name, student_no, student_name, note, original_name, stored_name, file_path, file_size, ip_address, submitted_at, updated_at)
+      SELECT id, class_name, student_no, student_name, note, original_name, stored_name, file_path, file_size, ip_address, submitted_at, updated_at FROM submissions;
+      DROP TABLE submissions;
+      ALTER TABLE submissions_new RENAME TO submissions;
+      CREATE INDEX IF NOT EXISTS idx_submissions_class ON submissions(class_name);
+      CREATE INDEX IF NOT EXISTS idx_submissions_student ON submissions(class_name, student_no);
+      COMMIT;
+    `);
+  }
 
   seedRosterIfEmpty();
 }
@@ -362,9 +392,9 @@ const dbOperations = {
       LEFT JOIN students st ON st.class_name = sub.class_name AND st.student_no = sub.student_no
     `;
     if (className) {
-      return db.prepare(`${sqlBase} WHERE sub.class_name = ? ORDER BY sub.student_no ASC`).all(className);
+      return db.prepare(`${sqlBase} WHERE sub.class_name = ? ORDER BY sub.student_no ASC, sub.id ASC`).all(className);
     }
-    return db.prepare(`${sqlBase} ORDER BY sub.class_name ASC, sub.student_no ASC`).all();
+    return db.prepare(`${sqlBase} ORDER BY sub.class_name ASC, sub.student_no ASC, sub.id ASC`).all();
   },
   getSubmissionById(id) {
     return db.prepare(`
@@ -377,29 +407,46 @@ const dbOperations = {
     `).get(Number(id));
   },
   getSingleSubmissionStatus(className, studentNo) {
-    const row = db.prepare(`
+    const cleanClass = String(className || '').trim();
+    const numNo = Number(studentNo);
+    const rows = db.prepare(`
       SELECT class_name, student_no, original_name, file_size, submitted_at, updated_at
       FROM submissions
       WHERE class_name = ? AND student_no = ?
-    `).get(String(className || '').trim(), Number(studentNo));
-    if (!row) {
+      ORDER BY id ASC
+    `).all(cleanClass, numNo);
+    if (!rows || rows.length === 0) {
       return {
         submitted: false,
-        className: String(className || '').trim(),
-        studentNo: Number(studentNo)
+        className: cleanClass,
+        studentNo: numNo,
+        fileCount: 0,
+        files: []
       };
     }
+    const totalSize = rows.reduce((sum, r) => sum + (Number(r.file_size) || 0), 0);
+    const latestRow = rows.reduce((latest, r) => {
+      const curTime = r.updated_at || r.submitted_at || '';
+      const bestTime = latest.updated_at || latest.submitted_at || '';
+      return curTime >= bestTime ? r : latest;
+    }, rows[0]);
     return {
       submitted: true,
-      className: row.class_name,
-      studentNo: Number(row.student_no),
-      originalName: row.original_name,
-      fileSize: row.file_size,
-      updatedAt: row.updated_at || row.submitted_at
+      className: rows[0].class_name,
+      studentNo: Number(rows[0].student_no),
+      fileCount: rows.length,
+      originalName: rows.map(r => r.original_name).join('、'),
+      fileSize: totalSize,
+      updatedAt: latestRow.updated_at || latestRow.submitted_at,
+      files: rows.map(r => ({
+        originalName: r.original_name,
+        fileSize: Number(r.file_size) || 0,
+        updatedAt: r.updated_at || r.submitted_at
+      }))
     };
   },
   saveOrUpdateSubmission({ className, studentNo, studentName, note, originalName, storedName, filePath, fileSize, ipAddress }) {
-    const existing = db.prepare('SELECT * FROM submissions WHERE class_name = ? AND student_no = ?').get(className, studentNo);
+    const existing = db.prepare('SELECT * FROM submissions WHERE class_name = ? AND student_no = ? AND original_name = ?').get(className, studentNo, originalName);
     if (existing) {
       if (existing.file_path && existing.file_path !== filePath && fs.existsSync(existing.file_path)) {
         try {
@@ -412,9 +459,9 @@ const dbOperations = {
       const updateStmt = db.prepare(`
         UPDATE submissions
         SET student_name = ?, note = ?, original_name = ?, stored_name = ?, file_path = ?, file_size = ?, ip_address = ?, updated_at = datetime('now', 'localtime')
-        WHERE class_name = ? AND student_no = ?
+        WHERE id = ?
       `);
-      updateStmt.run(studentName || '', note || '', originalName, storedName, filePath, fileSize, ipAddress || '', className, studentNo);
+      updateStmt.run(studentName || '', note || '', originalName, storedName, filePath, fileSize, ipAddress || '', existing.id);
       return { id: existing.id, isUpdate: true };
     } else {
       const insertStmt = db.prepare(`

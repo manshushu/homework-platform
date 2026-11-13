@@ -388,7 +388,12 @@ function renderSubmissionsTable() {
   const missingListEl = document.getElementById('missingStudentsList');
   const missingLabelEl = document.getElementById('missingClassLabel');
 
-  if (statCount) statCount.textContent = `${list.length} 份`;
+  const uniqueStudentCount = new Set(list.map(s => `${s.class_name}__${s.student_no}`)).size;
+  if (statCount) {
+    statCount.textContent = uniqueStudentCount !== list.length
+      ? `${uniqueStudentCount} 人 / ${list.length} 份`
+      : `${list.length} 份`;
+  }
 
   if (filterClass) {
     let totalCount = 0;
@@ -501,28 +506,90 @@ function initMaterialsManagement() {
   const form = document.getElementById('uploadMaterialForm');
   const fileInput = document.getElementById('materialFileInput');
   const fileInfo = document.getElementById('materialFileInfo');
-  const fileName = document.getElementById('materialFileName');
-  const fileSize = document.getElementById('materialFileSize');
+  const fileCountLabel = document.getElementById('materialFileCountLabel');
+  const fileListItems = document.getElementById('materialFileListItems');
+  const btnClearFiles = document.getElementById('btnClearMaterialFiles');
   const dropzone = document.getElementById('materialDropzone');
   const btnRefresh = document.getElementById('btnRefreshTeacherMaterials');
+  let selectedMaterialFiles = [];
+
+  function renderMaterialFiles() {
+    if (!fileInfo || !fileCountLabel || !fileListItems) return;
+    if (selectedMaterialFiles.length === 0) {
+      fileInfo.style.display = 'none';
+      fileListItems.innerHTML = '';
+      return;
+    }
+
+    const totalSize = selectedMaterialFiles.reduce((sum, f) => sum + f.size, 0);
+    fileCountLabel.textContent = `📄 已选 ${selectedMaterialFiles.length} 个文件（共 ${formatBytes(totalSize)}）`;
+    fileListItems.innerHTML = selectedMaterialFiles.map((file, idx) => `
+      <div class="selected-file-row">
+        <span class="selected-file-row-name">${escapeHtml(file.name)}</span>
+        <span class="selected-file-row-meta">
+          <span style="color: var(--text-muted); font-size: 12px;">${formatBytes(file.size)}</span>
+          <button type="button" class="btn-remove-file" data-index="${idx}" title="移除此文件">×</button>
+        </span>
+      </div>
+    `).join('');
+    fileInfo.style.display = 'block';
+  }
+
+  function appendMaterialFiles(fileList) {
+    if (!fileList || fileList.length === 0) return;
+    for (const file of Array.from(fileList)) {
+      const existingIdx = selectedMaterialFiles.findIndex(f => f.name === file.name);
+      if (existingIdx >= 0) {
+        selectedMaterialFiles[existingIdx] = file;
+      } else {
+        selectedMaterialFiles.push(file);
+      }
+    }
+    if (selectedMaterialFiles.length > 20) {
+      selectedMaterialFiles = selectedMaterialFiles.slice(0, 20);
+      showMaterialNotice('error', '单次最多同时发布 20 个文件，已保留前 20 个');
+    }
+    renderMaterialFiles();
+  }
 
   if (fileInput) {
     fileInput.addEventListener('change', () => {
-      if (fileInput.files && fileInput.files[0]) {
-        const file = fileInput.files[0];
-        fileName.textContent = file.name;
-        fileSize.textContent = `(${formatBytes(file.size)})`;
-        fileInfo.style.display = 'inline-flex';
-      } else {
-        fileInfo.style.display = 'none';
+      if (fileInput.files && fileInput.files.length > 0) {
+        appendMaterialFiles(fileInput.files);
+        fileInput.value = '';
       }
     });
   }
 
+  if (fileListItems) {
+    fileListItems.addEventListener('click', (e) => {
+      const btn = e.target.closest('.btn-remove-file');
+      if (!btn) return;
+      const idx = parseInt(btn.dataset.index, 10);
+      if (!isNaN(idx)) {
+        selectedMaterialFiles.splice(idx, 1);
+        renderMaterialFiles();
+      }
+    });
+  }
+
+  if (btnClearFiles) {
+    btnClearFiles.addEventListener('click', () => {
+      selectedMaterialFiles = [];
+      if (fileInput) fileInput.value = '';
+      renderMaterialFiles();
+    });
+  }
+
   if (dropzone) {
+    dropzone.addEventListener('click', () => {
+      if (fileInput) fileInput.click();
+    });
+
     ['dragenter', 'dragover'].forEach(eventName => {
       dropzone.addEventListener(eventName, (e) => {
         e.preventDefault();
+        e.stopPropagation();
         dropzone.classList.add('dragover');
       }, false);
     });
@@ -530,17 +597,16 @@ function initMaterialsManagement() {
     ['dragleave', 'drop'].forEach(eventName => {
       dropzone.addEventListener(eventName, (e) => {
         e.preventDefault();
+        e.stopPropagation();
         dropzone.classList.remove('dragover');
       }, false);
     });
 
     dropzone.addEventListener('drop', (e) => {
-      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-        fileInput.files = e.dataTransfer.files;
-        const file = fileInput.files[0];
-        fileName.textContent = file.name;
-        fileSize.textContent = `(${formatBytes(file.size)})`;
-        fileInfo.style.display = 'inline-flex';
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        appendMaterialFiles(e.dataTransfer.files);
       }
     });
   }
@@ -552,8 +618,7 @@ function initMaterialsManagement() {
   if (form) {
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const file = fileInput.files[0];
-      if (!file) {
+      if (selectedMaterialFiles.length === 0) {
         showMaterialNotice('error', '请选择要上传的文件');
         return;
       }
@@ -561,12 +626,14 @@ function initMaterialsManagement() {
       const title = (document.getElementById('materialTitle').value || '').trim();
       const formData = new FormData();
       formData.append('title', title);
-      formData.append('file', file);
+      for (const file of selectedMaterialFiles) {
+        formData.append('files', file);
+      }
 
       const btnUpload = document.getElementById('btnUploadMaterial');
       const btnUploadText = document.getElementById('btnUploadMaterialText');
       btnUpload.disabled = true;
-      btnUploadText.textContent = '⏳ 上传中...';
+      btnUploadText.textContent = `⏳ 正在上传 ${selectedMaterialFiles.length} 个文件...`;
 
       try {
         const res = await fetch('/api/materials', {
@@ -575,9 +642,14 @@ function initMaterialsManagement() {
         });
         const json = await res.json();
         if (json.success) {
-          showMaterialNotice('success', `✅ 文件《${escapeHtml(file.name)}》已成功发布，学生可在学生端随时下载！`);
+          const names = selectedMaterialFiles.map(f => f.name).join('、');
+          const msg = selectedMaterialFiles.length === 1
+            ? `✅ 文件《${escapeHtml(names)}》已成功发布，学生可在学生端随时下载！`
+            : `✅ 已成功发布 ${selectedMaterialFiles.length} 个文件（${escapeHtml(names)}），学生可在学生端随时下载！`;
+          showMaterialNotice('success', msg);
           form.reset();
-          fileInfo.style.display = 'none';
+          selectedMaterialFiles = [];
+          renderMaterialFiles();
           loadMaterialsList();
         } else {
           showMaterialNotice('error', escapeHtml(json.message || '上传失败'));
