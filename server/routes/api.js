@@ -22,6 +22,21 @@ function decodeOriginalName(originalname) {
   }
 }
 
+const teacherSseClients = new Set();
+
+function notifyTeacherClients(eventName, payload = {}) {
+  if (teacherSseClients.size === 0) return;
+  const data = JSON.stringify({ ...payload, ts: Date.now() });
+  const chunk = `event: ${eventName}\ndata: ${data}\n\n`;
+  for (const res of teacherSseClients) {
+    try {
+      res.write(chunk);
+    } catch (e) {
+      teacherSseClients.delete(res);
+    }
+  }
+}
+
 function sanitizeFilenamePart(str) {
   return String(str || '').trim().replace(/[\\/:*?"<>|]/g, '_');
 }
@@ -308,6 +323,30 @@ router.get('/broadcast', (req, res) => {
   }
 });
 
+router.get('/teacher/events', auth.requireTeacherAuth, (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  res.write(`event: connected\ndata: ${JSON.stringify({ ok: true, ts: Date.now() })}\n\n`);
+  teacherSseClients.add(res);
+
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(': ping\n\n');
+    } catch (e) {
+      clearInterval(heartbeat);
+      teacherSseClients.delete(res);
+    }
+  }, 25000);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    teacherSseClients.delete(res);
+  });
+});
+
 router.post('/broadcast/start', auth.requireTeacherAuth, (req, res) => {
   try {
     const className = (req.body.class_name || '').trim();
@@ -319,6 +358,7 @@ router.post('/broadcast/start', auth.requireTeacherAuth, (req, res) => {
       return res.status(404).json({ success: false, message: '未找到指定班级' });
     }
     const state = db.setBroadcastState({ active: true, className });
+    notifyTeacherClients('broadcast_updated', { active: true, className });
     res.json({ success: true, data: state, message: `已开启【${className}】未交学号广播` });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -328,6 +368,7 @@ router.post('/broadcast/start', auth.requireTeacherAuth, (req, res) => {
 router.post('/broadcast/stop', auth.requireTeacherAuth, (req, res) => {
   try {
     const state = db.setBroadcastState({ active: false, className: '' });
+    notifyTeacherClients('broadcast_updated', { active: false, className: '' });
     res.json({ success: true, data: state, message: '已停止未交学号广播' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -548,6 +589,12 @@ router.post('/submissions', uploadSubmissionFields, (req, res) => {
       msg = `成功提交 ${totalCount} 个文件（其中 ${updateCount} 个同名文件已覆盖更新）。`;
     }
 
+    notifyTeacherClients('submissions_updated', {
+      className,
+      studentNo,
+      count: savedFiles.length
+    });
+
     // Strictly NO studentName returned to student client
     res.json({
       success: true,
@@ -595,6 +642,7 @@ router.get('/submissions/download/:id', auth.requireTeacherAuth, (req, res) => {
 router.delete('/submissions/:id', auth.requireTeacherAuth, (req, res) => {
   try {
     db.deleteSubmission(req.params.id);
+    notifyTeacherClients('submissions_updated', { deletedId: req.params.id });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

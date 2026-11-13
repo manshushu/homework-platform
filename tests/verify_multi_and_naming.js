@@ -134,6 +134,58 @@ async function runTests() {
       matRes.json.items.forEach(i => createdMaterialIds.push(i.id));
     }
 
+    // 2.5 Verify SSE real-time push to teacher endpoint when student submits
+    const sseReceived = await new Promise((resolve) => {
+      let resolved = false;
+      const timer = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          sseReq.destroy();
+          resolve(false);
+        }
+      }, 4000);
+
+      const sseReq = http.request({
+        hostname: '127.0.0.1',
+        port: 3898,
+        path: '/api/teacher/events',
+        method: 'GET',
+        headers: { Cookie: teacherCookie }
+      }, (res) => {
+        let buf = '';
+        res.on('data', async (chunk) => {
+          buf += chunk.toString('utf8');
+          if (buf.includes('event: connected') && !sseReq._triggered) {
+            sseReq._triggered = true;
+            const pushForm = createMultipartFormData(
+              { class_name: testClassName, student_no: '9', note: 'SSE测试' },
+              { name: 'files', filename: 'sse_test.py', content: Buffer.from('print(1)') }
+            );
+            await request('POST', '/api/submissions', { headers: pushForm.headers, body: pushForm.body });
+          }
+          if (buf.includes('event: submissions_updated') && !resolved) {
+            resolved = true;
+            clearTimeout(timer);
+            sseReq.destroy();
+            resolve(true);
+          }
+        });
+      });
+      sseReq.on('error', () => {
+        if (!resolved) {
+          resolved = true;
+          clearTimeout(timer);
+          resolve(false);
+        }
+      });
+      sseReq.end();
+    });
+    assert(sseReceived, '教师端 SSE 接口在学生提交后秒级收到 submissions_updated 推送');
+
+    // Cleanup student 9 test submission before continuing student 8 checks
+    const sseSubRows = db.db.prepare('SELECT id FROM submissions WHERE class_name = ? AND student_no = 9').all(testClassName);
+    sseSubRows.forEach(r => db.deleteSubmission(r.id));
+
     // 3. Student submits 1 file with messy duplicate prefix & timestamp
     const sub1 = createMultipartFormData(
       { class_name: testClassName, student_no: '8', note: '第一份' },
