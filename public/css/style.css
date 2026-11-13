@@ -152,13 +152,72 @@ body {
 /* Two-column layout for student page */
 .student-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1.15fr;
   gap: 24px;
+  align-items: start;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1024px) {
+  .app-header {
+    height: 50px;
+    padding: 0 14px;
+  }
+
+  .brand-icon {
+    width: 30px;
+    height: 30px;
+    font-size: 16px;
+  }
+
+  .brand-title {
+    font-size: 16px;
+  }
+
+  .main-wrapper {
+    margin: 12px auto;
+    padding: 0 12px;
+  }
+
   .student-grid {
     grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .student-card-submit {
+    order: -1;
+  }
+
+  .card-header {
+    padding: 12px 16px;
+  }
+
+  .card-body {
+    padding: 14px 16px;
+  }
+
+  .form-group {
+    margin-bottom: 12px;
+  }
+
+  .dropzone {
+    padding: 18px 14px;
+  }
+
+  .dropzone-icon {
+    font-size: 28px;
+    margin-bottom: 4px;
+  }
+}
+
+@media (max-width: 480px) {
+  .form-row {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .personal-status-box {
+    flex-wrap: wrap;
+    gap: 8px;
   }
 }
 
