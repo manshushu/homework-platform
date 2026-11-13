@@ -1,10 +1,13 @@
 node_modules/
+dist_update/
 storage/*.db
 storage/*.db-shm
 storage/*.db-wal
 storage/*.bak*
+storage/backups/
 storage/materials/
 storage/submissions/
+storage/logs/
 *.log
 *.tmp
 .DS_Store
