@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>教师管理后台 - 课堂作业收发平台</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <!-- Header -->
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-icon">🛠️</div>
+      <div>
+        <div class="brand-title">课堂作业收发平台</div>
+      </div>
+      <span class="brand-badge" style="background: #fef3c7; color: #b45309;">教师管理后台</span>
+    </div>
+    <div class="header-right">
+      <div class="lan-pill" id="ipBadge">
+        <span>🌐 局域网地址:</span> <strong id="serverUrl">加载中...</strong>
+      </div>
+      <a href="/" target="_blank" class="btn-nav btn-nav-primary">
+        <span>🌐 打开学生端页面</span>
+      </a>
+      <button type="button" id="btnTeacherLogout" class="btn-nav" style="cursor: pointer;">
+        <span>🔒 退出登录</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="main-wrapper">
+    <!-- Navigation Tabs -->
+    <div class="tabs-bar">
+      <button class="tab-btn active" data-tab="submissions">📥 学生作业收取与导出</button>
+      <button class="tab-btn" data-tab="materials">📤 发布作业与学习资料</button>
+      <button class="tab-btn" data-tab="classes">⚙️ 班级设置与名单</button>
+    </div>
+
+    <!-- Tab 1: Submissions Management -->
+    <div id="tabSubmissions" class="tab-content">
+      <!-- Active Broadcast Global Indicator -->
+      <div id="activeBroadcastBar" class="active-broadcast-bar">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span class="live-dot"></span>
+          <span id="activeBroadcastText">正在向学生端广播...</span>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button type="button" class="btn btn-outline btn-sm" id="btnSwitchBroadcastClass" style="background:#fff;">
+            切到该班
+          </button>
+          <button type="button" class="btn btn-danger btn-sm" id="btnGlobalStopBroadcast">
+            ⏹️ 停止广播
+          </button>
+        </div>
+      </div>
+
+      <!-- Filter and Action Bar -->
+      <div class="card" style="margin-bottom: 20px;">
+        <div class="card-body" style="padding: 16px 20px; display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between;">
+          <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+            <label style="font-weight: 600; font-size: 14px;">筛选班级:</label>
+            <select id="filterClassSelect" class="form-select" style="width: 190px; padding: 7px 12px;">
+              <option value="">全部班级</option>
+            </select>
+
+            <input type="text" id="searchKeyword" class="form-input" placeholder="按学号或姓名搜索..." style="width: 180px; padding: 7px 12px;">
+
+            <button type="button" class="btn btn-outline btn-sm" id="btnRefreshSubmissions">
+              🔄 刷新
+            </button>
+          </div>
+
+          <div style="display: flex; gap: 10px;">
+            <button type="button" class="btn btn-success" id="btnExportZip">
+              📦 一键打包下载当前班级作业 (ZIP)
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Stats Summary -->
+      <div class="stats-row">
+        <div class="stat-card">
+          <div class="stat-label">已提交作业总数</div>
+          <div class="stat-num" id="statSubmittedCount">0 份</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">当前筛选班级应交人数</div>
+          <div class="stat-num" id="statTotalStudents" style="color: #475569;">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">未提交人数</div>
+          <div class="stat-num" id="statUnsubmittedCount" style="color: #ea580c;">-</div>
+        </div>
+      </div>
+
+      <!-- Missing Students List (Shown when a specific class is selected) -->
+      <div id="missingStudentsBox" class="missing-box" style="display: none; align-items: center;">
+        <span>📢</span>
+        <div style="flex: 1;">
+          <strong id="missingClassLabel">未交学号:</strong>
+          <span id="missingStudentsList" style="margin-left: 6px; word-break: break-all;">无</span>
+        </div>
+        <div style="display: flex; gap: 8px; flex-shrink: 0; flex-wrap: wrap;">
+          <button type="button" class="btn btn-outline btn-sm" id="btnCopyMissing" style="background:#fff; font-size: 12px; padding: 4px 10px;">
+            复制未交学号
+          </button>
+          <button type="button" class="btn btn-warning btn-sm" id="btnToggleBroadcast" style="font-size: 12px; padding: 4px 12px;">
+            📢 广播未交学号到学生端
+          </button>
+        </div>
+      </div>
+
+      <!-- Submissions Table -->
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th style="width: 110px;">班级</th>
+              <th style="width: 80px;">学号</th>
+              <th style="width: 100px;">姓名</th>
+              <th>作业文件名称</th>
+              <th style="width: 90px;">大小</th>
+              <th style="width: 160px;">提交/更新时间</th>
+              <th style="width: 120px;">学生IP</th>
+              <th style="width: 150px; text-align: center;">操作</th>
+            </tr>
+          </thead>
+          <tbody id="submissionsTableBody">
+            <tr>
+              <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">
+                正在加载作业数据...
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Tab 2: Materials Management -->
+    <div id="tabMaterials" class="tab-content" style="display: none;">
+      <div class="card" style="margin-bottom: 24px;">
+        <div class="card-header">
+          <div class="card-title">📤 发布新资料 / 作业要求文件</div>
+        </div>
+        <div class="card-body">
+          <div id="materialNotice" class="notice"></div>
+
+          <form id="uploadMaterialForm">
+            <div class="form-group">
+              <label class="form-label" for="materialTitle">
+                资料标题 / 说明 <span style="font-size: 12px; color: var(--text-muted); font-weight: normal;">(留空则默认使用原文件名)</span>
+              </label>
+              <input type="text" id="materialTitle" class="form-input" placeholder="如：第1课智能小车项目导学案、任务素材包等">
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">
+                选择文件 <span class="required">*</span>
+              </label>
+              <div class="dropzone" id="materialDropzone">
+                <div class="dropzone-icon">📁</div>
+                <div class="dropzone-text">点击选择文件，或将要发给学生的文件拖拽到此处</div>
+                <div class="dropzone-sub">支持课件PPT、PDF、Word文档、Python代码、Scratch案例、压缩包等各种格式</div>
+                <input type="file" id="materialFileInput" required>
+              </div>
+              <div id="materialFileInfo" style="display: none;" class="selected-file-badge">
+                <span>📄 已选文件:</span>
+                <span id="materialFileName"></span>
+                <span id="materialFileSize" style="color: var(--text-muted); font-size: 12px;"></span>
+              </div>
+            </div>
+
+            <button type="submit" class="btn btn-primary" id="btnUploadMaterial">
+              <span id="btnUploadMaterialText">🚀 立即发布文件</span>
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Materials List Table -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">📋 已发布的学习资料与作业列表</div>
+          <button type="button" class="btn btn-outline btn-sm" id="btnRefreshTeacherMaterials">
+            🔄 刷新
+          </button>
+        </div>
+        <div class="card-body" style="padding: 0;">
+          <div class="table-wrapper" style="border: none;">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>标题 / 文件名</th>
+                  <th style="width: 100px;">文件大小</th>
+                  <th style="width: 170px;">发布时间</th>
+                  <th style="width: 170px; text-align: center;">操作</th>
+                </tr>
+              </thead>
+              <tbody id="materialsTableBody">
+                <tr>
+                  <td colspan="4" style="text-align: center; color: var(--text-muted); padding: 30px;">
+                    正在加载资料列表...
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 3: Class Settings & Roster -->
+    <div id="tabClasses" class="tab-content" style="display: none;">
+      <div class="card" style="margin-bottom: 24px;">
+        <div class="card-header">
+          <div class="card-title">📥 导入 / 更新 Excel 学生名单</div>
+          <span style="font-size: 12px; color: var(--text-muted);">学生姓名仅教师后台可见，学生端全程只显示学号</span>
+        </div>
+        <div class="card-body">
+          <div id="rosterNotice" class="notice"></div>
+          <form id="importRosterForm" style="display: flex; gap: 14px; flex-wrap: wrap; align-items: center;">
+            <input type="file" id="rosterFileInput" accept=".xlsx,.xls" class="form-input" style="flex: 1; min-width: 240px; padding: 8px 12px;" required>
+            <button type="submit" class="btn btn-primary" id="btnImportRoster">
+              <span id="btnImportRosterText">📊 导入并更新内置名单</span>
+            </button>
+          </form>
+          <div style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">
+            支持《六七八年级学生名单汇总表.xlsx》格式，或包含“教学班级/班级”“班内座号/座号”“姓名”列的 Excel 表格。导入后将自动按名单更新班级及各班精确人数。
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom: 24px;">
+        <div class="card-header">
+          <div class="card-title">➕ 手动添加班级</div>
+        </div>
+        <div class="card-body">
+          <div id="classNotice" class="notice"></div>
+          <form id="addClassForm" style="display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end;">
+            <div style="flex: 2; min-width: 200px;">
+              <label class="form-label" for="newClassName">
+                班级名称 <span class="required">*</span>
+              </label>
+              <input type="text" id="newClassName" class="form-input" placeholder="例如：七年级5班、八年级1班" required>
+            </div>
+            <div style="flex: 1; min-width: 140px;">
+              <label class="form-label" for="newClassMaxNo">
+                班级人数 (学号上限)
+              </label>
+              <input type="number" id="newClassMaxNo" class="form-input" value="45" min="1" max="120">
+            </div>
+            <div>
+              <button type="submit" class="btn btn-primary" style="height: 42px;">
+                ➕ 添加班级
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">🏫 现有班级与内置名单情况</div>
+        </div>
+        <div class="card-body" style="padding: 0;">
+          <div class="table-wrapper" style="border: none;">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th style="width: 70px;">序号</th>
+                  <th>班级名称</th>
+                  <th style="width: 210px;">学号可选范围</th>
+                  <th style="width: 120px;">内置名单</th>
+                  <th style="width: 170px;">创建时间</th>
+                  <th style="width: 160px; text-align: center;">操作</th>
+                </tr>
+              </thead>
+              <tbody id="classesTableBody">
+                <tr>
+                  <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 30px;">
+                    正在加载班级列表...
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="card" style="margin-top: 24px;">
+        <div class="card-header">
+          <div class="card-title">🔐 教师管理密码设置</div>
+          <span style="font-size: 12px; color: var(--text-muted);">修改后其余浏览器需使用新密码重新登录</span>
+        </div>
+        <div class="card-body">
+          <div id="passwordNotice" class="notice"></div>
+          <form id="changePasswordForm" style="display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end;">
+            <div style="flex: 1; min-width: 180px;">
+              <label class="form-label" for="oldPasswordInput">
+                原密码 <span class="required">*</span>
+              </label>
+              <input type="password" id="oldPasswordInput" class="form-input" placeholder="请输入原密码" autocomplete="current-password" required>
+            </div>
+            <div style="flex: 1; min-width: 180px;">
+              <label class="form-label" for="newPasswordInput">
+                新密码 <span class="required">*</span>
+              </label>
+              <input type="password" id="newPasswordInput" class="form-input" placeholder="至少 4 位字符" minlength="4" maxlength="64" autocomplete="new-password" required>
+            </div>
+            <div style="flex: 1; min-width: 180px;">
+              <label class="form-label" for="confirmPasswordInput">
+                确认新密码 <span class="required">*</span>
+              </label>
+              <input type="password" id="confirmPasswordInput" class="form-input" placeholder="再次输入新密码" minlength="4" maxlength="64" autocomplete="new-password" required>
+            </div>
+            <div>
+              <button type="submit" class="btn btn-primary" style="height: 42px;">
+                🔑 保存新密码
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="app-footer">
+    中小学校园机房作业收发平台 · 教师管理中心
+  </footer>
+
+  <script src="/js/teacher.js"></script>
+</body>
+</html>

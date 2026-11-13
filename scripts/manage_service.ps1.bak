@@ -1,0 +1,63 @@
+﻿[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$Host.UI.RawUI.WindowTitle = "课堂作业收发平台 - 后台服务管理"
+$AppDir = Split-Path -Parent $PSScriptRoot
+$TaskName = "HomeworkPlatformServer"
+
+function Show-Status {
+    Write-Host ""
+    Write-Host "==================================================" -ForegroundColor Cyan
+    Write-Host "  课堂作业收发平台 - 持久化后台服务状态" -ForegroundColor Green
+    Write-Host "==================================================" -ForegroundColor Cyan
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if ($task) {
+        Write-Host "计划任务状态: $($task.State)" -ForegroundColor Yellow
+    } else {
+        Write-Host "计划任务状态: 未安装 ($TaskName)" -ForegroundColor Red
+    }
+
+    $tcp = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue
+    if ($tcp) {
+        Write-Host "3000 端口监听: 正常 (PID: $($tcp.OwningProcess -join ','))" -ForegroundColor Green
+    } else {
+        Write-Host "3000 端口监听: 未监听" -ForegroundColor Red
+    }
+
+    Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notmatch 'Loopback' -and $_.IPAddress -notmatch '^169\.254' } | ForEach-Object {
+        Write-Host "访问地址: http://$($_.IPAddress):3000  (教师端: /teacher)" -ForegroundColor Cyan
+    }
+    Write-Host "--------------------------------------------------" -ForegroundColor Gray
+}
+
+while ($true) {
+    Show-Status
+    Write-Host "请选择操作: [1] 启动/重启服务  [2] 停止服务  [3] 查看最近日志  [0] 退出"
+    $choice = Read-Host "输入数字"
+    if ($choice -eq '1') {
+        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+        Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.CommandLine -and $_.CommandLine -like "*server*index.js*") {
+                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+        }
+        Start-Sleep -Seconds 1
+        Start-ScheduledTask -TaskName $TaskName
+        Start-Sleep -Seconds 2
+    } elseif ($choice -eq '2') {
+        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+        Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.CommandLine -and $_.CommandLine -like "*server*index.js*") {
+                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+        }
+        Write-Host "已停止服务。" -ForegroundColor Yellow
+    } elseif ($choice -eq '3') {
+        $logFile = Join-Path $AppDir 'storage\logs\service.log'
+        if (Test-Path $logFile) {
+            Get-Content $logFile -Tail 20
+        } else {
+            Write-Host "暂无日志。"
+        }
+    } elseif ($choice -eq '0') {
+        break
+    }
+}

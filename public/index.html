@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>课堂作业收发平台</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <!-- Header -->
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-icon">📁</div>
+      <div>
+        <div class="brand-title">课堂作业收发平台</div>
+      </div>
+      <span class="brand-badge">学生端</span>
+    </div>
+    <div class="header-right">
+      <div class="lan-pill" id="ipBadge" title="局域网机房访问地址">
+        <span>🌐 平台地址:</span> <strong id="serverUrl">加载中...</strong>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="main-wrapper">
+    <!-- Live Broadcast Panel (Shown when teacher activates broadcast) -->
+    <section id="broadcastPanel" class="broadcast-card" style="display: none;">
+      <div class="broadcast-header">
+        <div class="broadcast-title-wrap">
+          <span class="broadcast-title" id="broadcastTitle">📢 教师正在广播作业提交情况</span>
+          <span class="live-pill">
+            <span class="live-dot"></span>
+            实时同步中
+          </span>
+        </div>
+        <div class="broadcast-stats" id="broadcastStats"></div>
+      </div>
+      <div class="broadcast-body">
+        <div class="missing-tags-row" id="broadcastMissingRow"></div>
+        <div class="seat-wall-header">
+          <span id="broadcastWallHint">全班学号提交状态（仅显示学号，绿色代表已交成功）</span>
+          <div class="seat-legend">
+            <span class="legend-item">
+              <span class="legend-dot" style="background:#dcfce7; border:1px solid #bbf7d0;"></span>
+              已交成功
+            </span>
+            <span class="legend-item">
+              <span class="legend-dot" style="background:#fee2e2; border:1px solid #fecaca;"></span>
+              尚未提交
+            </span>
+          </div>
+        </div>
+        <div id="broadcastSeatGrid" class="seat-grid"></div>
+      </div>
+    </section>
+
+    <div class="student-grid">
+
+      <!-- Left Column: Materials Download -->
+      <section class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <span>📥 课堂资料与作业下载</span>
+          </div>
+          <button type="button" class="btn btn-outline btn-sm" id="btnRefreshMaterials" title="刷新资料列表">
+            🔄 刷新列表
+          </button>
+        </div>
+        <div class="card-body">
+          <div id="materialsList" class="material-list">
+            <div class="empty-state">
+              <div class="empty-state-icon">⏳</div>
+              <p>正在读取课堂资料...</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Column: Submit Homework -->
+      <section class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <span>📤 提交我的作业</span>
+          </div>
+          <span style="font-size: 13px; color: var(--text-muted);">选择班级和学号直接提交</span>
+        </div>
+        <div class="card-body">
+          <!-- Notification Alert -->
+          <div id="submitNotice" class="notice"></div>
+
+          <form id="submissionForm" enctype="multipart/form-data">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label" for="classSelect">
+                  所在班级 <span class="required">*</span>
+                </label>
+                <select id="classSelect" class="form-select" required>
+                  <option value="">-- 请选择班级 --</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label" for="studentNoSelect">
+                  我的学号 <span class="required">*</span>
+                </label>
+                <select id="studentNoSelect" class="form-select" required>
+                  <option value="">-- 请先选择班级 --</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Live Personal Submission Status -->
+            <div id="myStatusBox" class="personal-status-box"></div>
+
+            <div class="form-group">
+              <label class="form-label">
+                作业文件 <span class="required">*</span>
+              </label>
+              <div class="dropzone" id="dropzone">
+                <div class="dropzone-icon">📎</div>
+                <div class="dropzone-text">点击选择文件，或将作业文件拖拽到此处</div>
+                <div class="dropzone-sub">支持任意格式文件 (.sb3, .py, .mp, .zip, .docx, .png 等)</div>
+                <input type="file" id="fileInput" name="file" required>
+              </div>
+              <div id="fileInfo" style="display: none;" class="selected-file-badge">
+                <span>📄 已选文件:</span>
+                <span id="fileName" style="word-break: break-all;"></span>
+                <span id="fileSize" style="color: var(--text-muted); font-size: 12px;"></span>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="note">
+                提交留言 / 备注 <span style="font-size: 12px; color: var(--text-muted); font-weight: normal;">(选填)</span>
+              </label>
+              <input type="text" id="note" class="form-input" placeholder="可简要说明作业情况或给老师的留言" maxlength="100">
+            </div>
+
+            <button type="submit" class="btn btn-primary btn-block" id="btnSubmit">
+              <span id="btnSubmitText">🚀 确认提交作业</span>
+            </button>
+          </form>
+
+          <!-- Local Submission History -->
+          <div style="margin-top: 28px; border-top: 1px dashed var(--border); padding-top: 16px;">
+            <div style="font-size: 14px; font-weight: 600; color: #475569; margin-bottom: 8px;">
+              🕒 本机提交记录
+            </div>
+            <div id="localHistoryList" style="font-size: 13px; color: var(--text-muted);">
+              暂无本机提交记录。
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- Footer -->
+  <footer class="app-footer">
+    中小学校园机房作业收发平台 · 纯净轻量版
+  </footer>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>

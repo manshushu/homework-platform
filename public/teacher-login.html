@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>教师管理登录 - 课堂作业收发平台</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <style>
+    .login-wrap {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .login-card {
+      width: 100%;
+      max-width: 420px;
+      background: #ffffff;
+      border: 1px solid var(--border, #e2e8f0);
+      border-radius: 16px;
+      box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+      overflow: hidden;
+    }
+    .login-card-header {
+      padding: 24px 28px 18px;
+      border-bottom: 1px solid var(--border, #e2e8f0);
+      text-align: center;
+      background: linear-gradient(135deg, #f8fafc, #eff6ff);
+    }
+    .login-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 999px;
+      background: #fef3c7;
+      color: #b45309;
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 10px;
+    }
+    .login-title {
+      font-size: 20px;
+      font-weight: 700;
+      color: #0f172a;
+      margin-bottom: 6px;
+    }
+    .login-subtitle {
+      font-size: 13px;
+      color: #64748b;
+    }
+    .login-card-body {
+      padding: 24px 28px 28px;
+    }
+    .login-back {
+      display: block;
+      text-align: center;
+      margin-top: 16px;
+      font-size: 13px;
+      color: #64748b;
+      text-decoration: none;
+    }
+    .login-back:hover {
+      color: #2563eb;
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="login-card-header">
+        <span class="login-badge">🛠️ 教师管理中心</span>
+        <div class="login-title">课堂作业收发平台</div>
+        <div class="login-subtitle">此区域仅限授课教师登录管理</div>
+      </div>
+      <div class="login-card-body">
+        <div id="loginNotice" class="notice"></div>
+        <form id="teacherLoginForm">
+          <div class="form-group">
+            <label class="form-label" for="teacherPassword">
+              教师管理密码 <span class="required">*</span>
+            </label>
+            <input
+              type="password"
+              id="teacherPassword"
+              class="form-input"
+              placeholder="请输入教师管理密码"
+              autocomplete="current-password"
+              autofocus
+              required
+            >
+          </div>
+          <button type="submit" class="btn btn-primary btn-block" id="btnLogin" style="height: 44px; font-size: 15px;">
+            🔐 登录教师后台
+          </button>
+        </form>
+        <a href="/" class="login-back">← 返回学生交作业页面</a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('teacherLoginForm');
+    const pwdInput = document.getElementById('teacherPassword');
+    const notice = document.getElementById('loginNotice');
+    const btnLogin = document.getElementById('btnLogin');
+
+    function showLoginError(msg) {
+      notice.className = 'notice notice-error';
+      notice.textContent = msg;
+      notice.style.display = 'flex';
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const password = pwdInput.value;
+      if (!password) {
+        showLoginError('请输入教师管理密码');
+        return;
+      }
+
+      btnLogin.disabled = true;
+      btnLogin.textContent = '验证中...';
+      notice.style.display = 'none';
+
+      try {
+        const res = await fetch('/api/teacher/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password })
+        });
+        const json = await res.json();
+        if (json.success) {
+          window.location.replace('/teacher');
+        } else {
+          showLoginError(json.message || '密码错误，请重试');
+          pwdInput.select();
+        }
+      } catch (err) {
+        showLoginError('网络异常，请检查服务器连接');
+      } finally {
+        btnLogin.disabled = false;
+        btnLogin.textContent = '🔐 登录教师后台';
+      }
+    });
+  </script>
+</body>
+</html>
