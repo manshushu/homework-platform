@@ -26,6 +26,79 @@ function sanitizeFilenamePart(str) {
   return String(str || '').trim().replace(/[\\/:*?"<>|]/g, '_');
 }
 
+function escapeRegExp(str) {
+  return String(str || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Strip redundant student number, student name, and timestamp suffixes from original filename
+function normalizeStudentOriginalName(rawOriginalName, studentNo, studentName) {
+  const safeOrig = sanitizeFilenamePart(rawOriginalName || '作业');
+  const ext = path.extname(safeOrig);
+  let base = path.basename(safeOrig, ext).trim();
+
+  // Remove trailing long timestamp / random numeric suffixes such as _1794533562239 or _1794533562239_123
+  base = base.replace(/(?:[_\-\s]+\d{10,13}(?:_\d{1,5})?)+$/g, '');
+
+  const noNum = parseInt(studentNo, 10);
+  const noPatterns = [];
+  if (!isNaN(noNum) && noNum > 0) {
+    const paddedNo = String(noNum).padStart(2, '0');
+    const rawNo = String(noNum);
+    noPatterns.push(paddedNo, rawNo);
+  }
+  const cleanStudentName = sanitizeFilenamePart(studentName || '');
+
+  // Iteratively strip leading duplicated studentNo / studentName prefixes
+  let changed = true;
+  while (changed && base) {
+    changed = false;
+    base = base.replace(/^[\s_\-—.]+/, '');
+
+    if (cleanStudentName) {
+      const nameRe = new RegExp(`^${escapeRegExp(cleanStudentName)}(?:[\\s_\\-—.]+|$)`);
+      if (nameRe.test(base)) {
+        base = base.replace(nameRe, '');
+        changed = true;
+        continue;
+      }
+    }
+
+    for (const noStr of noPatterns) {
+      const noRe = new RegExp(`^${escapeRegExp(noStr)}号?(?:[\\s_\\-—.]+|$)`);
+      if (noRe.test(base)) {
+        base = base.replace(noRe, '');
+        changed = true;
+        break;
+      }
+    }
+  }
+
+  base = base.replace(/[\s_\-—.]+$/g, '').replace(/_{2,}/g, '_');
+  if (!base) {
+    base = '作业';
+  }
+  return `${base}${ext}`;
+}
+
+function buildFormattedSubmissionFilename(studentNo, studentName, cleanOriginalName) {
+  const paddedNo = String(studentNo).padStart(2, '0');
+  const safeName = sanitizeFilenamePart(studentName || '');
+  const namePart = safeName ? `_${safeName}` : '';
+  return `${paddedNo}号${namePart}_${cleanOriginalName}`;
+}
+
+function cleanupUploadedFiles(files) {
+  for (const f of files) {
+    if (f && f.path && fs.existsSync(f.path)) {
+      try {
+        fs.unlinkSync(f.path);
+      } catch (e) {
+        console.error('清理无效上传文件失败:', e);
+      }
+    }
+  }
+}
+
 // Multer storage for teacher materials
 const materialStorage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -55,15 +128,10 @@ const submissionStorage = multer.diskStorage({
     cb(null, classDir);
   },
   filename: function (req, file, cb) {
-    const studentNoNum = parseInt(req.body.student_no, 10) || 0;
-    const studentNo = String(studentNoNum).padStart(2, '0');
-    const rosterStudent = db.getStudent(req.body.class_name, studentNoNum);
-    const studentName = sanitizeFilenamePart(rosterStudent ? rosterStudent.student_name : '学生');
     const orig = decodeOriginalName(file.originalname);
     const ext = path.extname(orig);
-    const base = sanitizeFilenamePart(path.basename(orig, ext));
-    const unique = Date.now();
-    cb(null, `${studentNo}号_${studentName}_${base}_${unique}${ext}`);
+    const unique = `${Date.now()}_${Math.floor(Math.random() * 100000)}`;
+    cb(null, `.__tmp_${unique}${ext}`);
   }
 });
 const uploadSubmission = multer({
@@ -307,20 +375,42 @@ router.get('/materials', (req, res) => {
   }
 });
 
-router.post('/materials', auth.requireTeacherAuth, uploadMaterial.single('file'), (req, res) => {
+const uploadMaterialFields = uploadMaterial.fields([
+  { name: 'files', maxCount: 20 },
+  { name: 'file', maxCount: 20 }
+]);
+
+router.post('/materials', auth.requireTeacherAuth, uploadMaterialFields, (req, res) => {
+  const uploadedFiles = [
+    ...((req.files && req.files.files) || []),
+    ...((req.files && req.files.file) || [])
+  ];
+
   try {
-    if (!req.file) {
+    if (uploadedFiles.length === 0) {
       return res.status(400).json({ success: false, message: '请选择要上传的文件' });
     }
-    const originalName = decodeOriginalName(req.file.originalname);
-    const title = (req.body.title || originalName).trim();
-    const storedName = req.file.filename;
-    const filePath = req.file.path;
-    const fileSize = req.file.size;
+    const customTitle = (req.body.title || '').trim();
+    const items = [];
 
-    const item = db.addMaterial(title, originalName, storedName, filePath, fileSize);
-    res.json({ success: true, data: item, message: '文件上传成功' });
+    for (const file of uploadedFiles) {
+      const originalName = decodeOriginalName(file.originalname);
+      let title = originalName;
+      if (customTitle) {
+        title = uploadedFiles.length === 1 ? customTitle : `${customTitle} - ${originalName}`;
+      }
+      const item = db.addMaterial(title, originalName, file.filename, file.path, file.size);
+      items.push(item);
+    }
+
+    res.json({
+      success: true,
+      data: items.length === 1 ? items[0] : items,
+      items,
+      message: items.length === 1 ? '文件上传成功' : `成功发布 ${items.length} 个文件`
+    });
   } catch (err) {
+    cleanupUploadedFiles(uploadedFiles);
     console.error('上传资料错误:', err);
     res.status(500).json({ success: false, message: err.message || '上传失败' });
   }
@@ -363,9 +453,19 @@ router.get('/submissions', auth.requireTeacherAuth, (req, res) => {
   }
 });
 
-router.post('/submissions', uploadSubmission.single('file'), (req, res) => {
+const uploadSubmissionFields = uploadSubmission.fields([
+  { name: 'files', maxCount: 20 },
+  { name: 'file', maxCount: 20 }
+]);
+
+router.post('/submissions', uploadSubmissionFields, (req, res) => {
+  const uploadedFiles = [
+    ...((req.files && req.files.files) || []),
+    ...((req.files && req.files.file) || [])
+  ];
+
   try {
-    if (!req.file) {
+    if (uploadedFiles.length === 0) {
       return res.status(400).json({ success: false, message: '请选择作业文件' });
     }
     const className = (req.body.class_name || '').trim();
@@ -373,9 +473,11 @@ router.post('/submissions', uploadSubmission.single('file'), (req, res) => {
     const note = (req.body.note || '').trim();
 
     if (!className) {
+      cleanupUploadedFiles(uploadedFiles);
       return res.status(400).json({ success: false, message: '请选择所在班级' });
     }
     if (!studentNo || isNaN(studentNo) || studentNo <= 0) {
+      cleanupUploadedFiles(uploadedFiles);
       return res.status(400).json({ success: false, message: '请选择有效学号' });
     }
 
@@ -383,49 +485,68 @@ router.post('/submissions', uploadSubmission.single('file'), (req, res) => {
     const rosterStudent = db.getStudent(className, studentNo);
     const studentName = rosterStudent ? rosterStudent.student_name : '';
 
-    const originalName = decodeOriginalName(req.file.originalname);
-    let storedName = req.file.filename;
-    let filePath = req.file.path;
-
-    // Ensure target folder and stored filename reflect matched class & roster name
     const safeClassDir = path.join(db.submissionsDir, sanitizeFilenamePart(className));
     if (!fs.existsSync(safeClassDir)) {
       fs.mkdirSync(safeClassDir, { recursive: true });
     }
+
     const paddedNo = String(studentNo).padStart(2, '0');
-    const safeName = sanitizeFilenamePart(studentName || '未匹配姓名');
-    const ext = path.extname(originalName);
-    const base = sanitizeFilenamePart(path.basename(originalName, ext));
-    const expectedStoredName = `${paddedNo}号_${safeName}_${base}_${Date.now()}${ext}`;
-    const expectedFilePath = path.join(safeClassDir, expectedStoredName);
-    if (filePath !== expectedFilePath) {
-      try {
-        fs.renameSync(filePath, expectedFilePath);
-        filePath = expectedFilePath;
-        storedName = expectedStoredName;
-      } catch (renameErr) {
-        console.error('重命名作业文件失败:', renameErr);
+    const ipAddress = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').replace('::ffff:', '');
+    let updateCount = 0;
+    const savedFiles = [];
+
+    for (const file of uploadedFiles) {
+      const rawOriginalName = decodeOriginalName(file.originalname);
+      const cleanOriginalName = normalizeStudentOriginalName(rawOriginalName, studentNo, studentName);
+      const formattedStoredName = buildFormattedSubmissionFilename(studentNo, studentName, cleanOriginalName);
+      let finalFilePath = path.join(safeClassDir, formattedStoredName);
+      let finalStoredName = formattedStoredName;
+
+      if (file.path !== finalFilePath) {
+        try {
+          fs.renameSync(file.path, finalFilePath);
+        } catch (renameErr) {
+          console.error('重命名作业文件失败:', renameErr);
+          finalFilePath = file.path;
+          finalStoredName = file.filename;
+        }
       }
+
+      const result = db.saveOrUpdateSubmission({
+        className,
+        studentNo,
+        studentName,
+        note,
+        originalName: cleanOriginalName,
+        storedName: finalStoredName,
+        filePath: finalFilePath,
+        fileSize: file.size,
+        ipAddress
+      });
+
+      if (result.isUpdate) updateCount++;
+      savedFiles.push({
+        id: result.id,
+        originalName: cleanOriginalName,
+        storedName: finalStoredName,
+        fileSize: file.size,
+        isUpdate: result.isUpdate
+      });
     }
 
-    const fileSize = req.file.size;
-    const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
-
-    const result = db.saveOrUpdateSubmission({
-      className,
-      studentNo,
-      studentName,
-      note,
-      originalName,
-      storedName,
-      filePath,
-      fileSize,
-      ipAddress: String(ipAddress).replace('::ffff:', '')
-    });
-
-    const msg = result.isUpdate
-      ? `学号 ${paddedNo} 号已有提交记录，已成功覆盖更新作业！`
-      : `提交成功！学号 ${paddedNo} 号作业已收到。`;
+    const totalCount = savedFiles.length;
+    let msg;
+    if (totalCount === 1) {
+      msg = updateCount === 1
+        ? `学号 ${paddedNo} 号已有同名作业，已成功为您覆盖更新！`
+        : `提交成功！学号 ${paddedNo} 号作业已收到。`;
+    } else if (updateCount === 0) {
+      msg = `提交成功！学号 ${paddedNo} 号共收到 ${totalCount} 个作业文件。`;
+    } else if (updateCount === totalCount) {
+      msg = `学号 ${paddedNo} 号的 ${totalCount} 个同名作业文件已全部覆盖更新！`;
+    } else {
+      msg = `成功提交 ${totalCount} 个文件（其中 ${updateCount} 个同名文件已覆盖更新）。`;
+    }
 
     // Strictly NO studentName returned to student client
     res.json({
@@ -434,12 +555,19 @@ router.post('/submissions', uploadSubmission.single('file'), (req, res) => {
       data: {
         className,
         studentNo,
-        originalName,
-        fileSize,
+        originalName: savedFiles.map(f => f.originalName).join('、'),
+        fileSize: savedFiles.reduce((sum, f) => sum + f.fileSize, 0),
+        files: savedFiles.map(f => ({
+          id: f.id,
+          originalName: f.originalName,
+          fileSize: f.fileSize,
+          isUpdate: f.isUpdate
+        })),
         submittedAt: new Date().toLocaleTimeString('zh-CN', { hour12: false })
       }
     });
   } catch (err) {
+    cleanupUploadedFiles(uploadedFiles);
     console.error('提交作业错误:', err);
     res.status(500).json({ success: false, message: err.message || '提交异常' });
   }
@@ -451,9 +579,9 @@ router.get('/submissions/download/:id', auth.requireTeacherAuth, (req, res) => {
     if (!item || !fs.existsSync(item.file_path)) {
       return res.status(404).send('作业文件不存在或已被删除');
     }
-    const paddedNo = String(item.student_no).padStart(2, '0');
-    const namePart = item.student_name ? `_${item.student_name}` : '';
-    const downloadName = `${item.class_name}_${paddedNo}号${namePart}_${item.original_name}`;
+    const cleanOrig = normalizeStudentOriginalName(item.original_name, item.student_no, item.student_name);
+    const formattedName = buildFormattedSubmissionFilename(item.student_no, item.student_name, cleanOrig);
+    const downloadName = `${sanitizeFilenamePart(item.class_name)}_${formattedName}`;
     const encodedName = encodeURIComponent(downloadName);
 
     res.setHeader('Content-Type', 'application/octet-stream');
@@ -484,15 +612,28 @@ router.get('/submissions/export-zip', auth.requireTeacherAuth, (req, res) => {
     }
 
     const zip = new AdmZip();
+    const usedZipEntries = new Set();
     let fileCount = 0;
 
     for (const sub of submissions) {
       if (sub.file_path && fs.existsSync(sub.file_path)) {
-        const paddedNo = String(sub.student_no).padStart(2, '0');
-        const namePart = sub.student_name ? `_${sub.student_name}` : '';
         const safeClass = sanitizeFilenamePart(sub.class_name || '未分班');
-        const safeOriginal = sanitizeFilenamePart(sub.original_name);
-        const inZipFileName = `${paddedNo}号${namePart}_${safeOriginal}`;
+        const cleanOrig = normalizeStudentOriginalName(sub.original_name, sub.student_no, sub.student_name);
+        let inZipFileName = buildFormattedSubmissionFilename(sub.student_no, sub.student_name, cleanOrig);
+
+        // Guard against duplicate entry names inside ZIP if legacy dirty filenames normalize to the same name
+        let entryKey = `${safeClass}/${inZipFileName}`.toLowerCase();
+        if (usedZipEntries.has(entryKey)) {
+          const ext = path.extname(inZipFileName);
+          const base = path.basename(inZipFileName, ext);
+          let seq = 2;
+          while (usedZipEntries.has(`${safeClass}/${base}_${seq}${ext}`.toLowerCase())) {
+            seq++;
+          }
+          inZipFileName = `${base}_${seq}${ext}`;
+          entryKey = `${safeClass}/${inZipFileName}`.toLowerCase();
+        }
+        usedZipEntries.add(entryKey);
 
         zip.addLocalFile(sub.file_path, safeClass, inZipFileName);
         fileCount++;

@@ -26,6 +26,7 @@ function formatDate(dateStr) {
 // Global state
 let classList = [];
 let latestBroadcastData = null;
+let selectedFiles = [];
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
@@ -250,14 +251,20 @@ async function checkMySubmissionStatus() {
 
     if (data.submitted) {
       statusBox.className = 'personal-status-box status-submitted';
+      const files = Array.isArray(data.files) && data.files.length > 0
+        ? data.files
+        : [{ originalName: data.originalName, fileSize: data.fileSize, updatedAt: data.updatedAt }];
+      const filesText = files
+        .map(f => `${escapeHtml(f.originalName)}（${formatBytes(f.fileSize)}）`)
+        .join('、');
       statusBox.innerHTML = `
         <div>
-          <strong>✅ ${escapeHtml(className)} ${padded}号 已交成功</strong>
+          <strong>✅ ${escapeHtml(className)} ${padded}号 已交 ${files.length} 个文件</strong>
           <div style="font-size: 12px; margin-top: 2px;">
-            已交文件：${escapeHtml(data.originalName)}（${formatBytes(data.fileSize)}） · 时间：${escapeHtml(formatDate(data.updatedAt))}
+            已交文件：${filesText} · 更新时间：${escapeHtml(formatDate(data.updatedAt))}
           </div>
         </div>
-        <span class="badge badge-green">重新提交可覆盖</span>
+        <span class="badge badge-green">重交同名覆盖 / 新名保留</span>
       `;
     } else {
       statusBox.className = 'personal-status-box status-unsubmitted';
@@ -350,8 +357,9 @@ function initFormEvents() {
   const dropzone = document.getElementById('dropzone');
   const fileInput = document.getElementById('fileInput');
   const fileInfo = document.getElementById('fileInfo');
-  const fileName = document.getElementById('fileName');
-  const fileSize = document.getElementById('fileSize');
+  const fileCountLabel = document.getElementById('fileCountLabel');
+  const fileListItems = document.getElementById('fileListItems');
+  const btnClearFiles = document.getElementById('btnClearFiles');
   const form = document.getElementById('submissionForm');
   const btnRefreshMaterials = document.getElementById('btnRefreshMaterials');
 
@@ -382,25 +390,89 @@ function initFormEvents() {
     });
   }
 
+  function renderSelectedFiles() {
+    if (!fileInfo || !fileCountLabel || !fileListItems) return;
+    if (selectedFiles.length === 0) {
+      fileInfo.style.display = 'none';
+      fileListItems.innerHTML = '';
+      return;
+    }
+
+    const totalSize = selectedFiles.reduce((sum, f) => sum + f.size, 0);
+    fileCountLabel.textContent = `📄 已选 ${selectedFiles.length} 个文件（共 ${formatBytes(totalSize)}）`;
+    fileListItems.innerHTML = selectedFiles.map((file, idx) => `
+      <div class="selected-file-row">
+        <span class="selected-file-row-name">${escapeHtml(file.name)}</span>
+        <span class="selected-file-row-meta">
+          <span style="color: var(--text-muted); font-size: 12px;">${formatBytes(file.size)}</span>
+          <button type="button" class="btn-remove-file" data-index="${idx}" title="移除此文件">×</button>
+        </span>
+      </div>
+    `).join('');
+    fileInfo.style.display = 'block';
+  }
+
+  function appendFiles(fileList) {
+    if (!fileList || fileList.length === 0) return;
+    for (const file of Array.from(fileList)) {
+      const existingIdx = selectedFiles.findIndex(f => f.name === file.name);
+      if (existingIdx >= 0) {
+        selectedFiles[existingIdx] = file;
+      } else {
+        selectedFiles.push(file);
+      }
+    }
+    if (selectedFiles.length > 20) {
+      selectedFiles = selectedFiles.slice(0, 20);
+      showNotice('error', '单次最多同时提交 20 个文件，已保留前 20 个');
+    }
+    renderSelectedFiles();
+  }
+
   // File selection change
   if (fileInput) {
     fileInput.addEventListener('change', () => {
-      if (fileInput.files && fileInput.files[0]) {
-        const file = fileInput.files[0];
-        fileName.textContent = file.name;
-        fileSize.textContent = `(${formatBytes(file.size)})`;
-        fileInfo.style.display = 'inline-flex';
-      } else {
-        fileInfo.style.display = 'none';
+      if (fileInput.files && fileInput.files.length > 0) {
+        appendFiles(fileInput.files);
+        fileInput.value = '';
       }
     });
   }
 
+  if (fileListItems) {
+    fileListItems.addEventListener('click', (e) => {
+      const btn = e.target.closest('.btn-remove-file');
+      if (!btn) return;
+      const idx = parseInt(btn.dataset.index, 10);
+      if (!isNaN(idx)) {
+        selectedFiles.splice(idx, 1);
+        renderSelectedFiles();
+      }
+    });
+  }
+
+  if (btnClearFiles) {
+    btnClearFiles.addEventListener('click', () => {
+      selectedFiles = [];
+      if (fileInput) fileInput.value = '';
+      renderSelectedFiles();
+    });
+  }
+
+  // Prevent browser from opening dropped files outside dropzone
+  document.addEventListener('dragover', (e) => e.preventDefault());
+  document.addEventListener('drop', (e) => e.preventDefault());
+
   // Drag and drop handlers
   if (dropzone) {
+    dropzone.addEventListener('click', () => {
+      if (fileInput) fileInput.click();
+    });
+
     ['dragenter', 'dragover'].forEach(eventName => {
       dropzone.addEventListener(eventName, (e) => {
         e.preventDefault();
+        e.stopPropagation();
         dropzone.classList.add('dragover');
       }, false);
     });
@@ -408,17 +480,16 @@ function initFormEvents() {
     ['dragleave', 'drop'].forEach(eventName => {
       dropzone.addEventListener(eventName, (e) => {
         e.preventDefault();
+        e.stopPropagation();
         dropzone.classList.remove('dragover');
       }, false);
     });
 
     dropzone.addEventListener('drop', (e) => {
-      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-        fileInput.files = e.dataTransfer.files;
-        const file = fileInput.files[0];
-        fileName.textContent = file.name;
-        fileSize.textContent = `(${formatBytes(file.size)})`;
-        fileInfo.style.display = 'inline-flex';
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        appendFiles(e.dataTransfer.files);
       }
     });
   }
@@ -431,7 +502,6 @@ function initFormEvents() {
       const className = classSelect.value;
       const studentNo = studentNoSelect.value;
       const note = (document.getElementById('note').value || '').trim();
-      const file = fileInput.files[0];
 
       if (!className) {
         showNotice('error', '请先选择你所在的班级');
@@ -441,7 +511,7 @@ function initFormEvents() {
         showNotice('error', '请选择你的学号');
         return;
       }
-      if (!file) {
+      if (selectedFiles.length === 0) {
         showNotice('error', '请选择要提交的作业文件');
         return;
       }
@@ -453,12 +523,14 @@ function initFormEvents() {
       formData.append('class_name', className);
       formData.append('student_no', studentNo);
       formData.append('note', note);
-      formData.append('file', file);
+      for (const file of selectedFiles) {
+        formData.append('files', file);
+      }
 
       const btnSubmit = document.getElementById('btnSubmit');
       const btnSubmitText = document.getElementById('btnSubmitText');
       btnSubmit.disabled = true;
-      btnSubmitText.textContent = '⏳ 正在上传作业中，请稍候...';
+      btnSubmitText.textContent = `⏳ 正在上传 ${selectedFiles.length} 个文件，请稍候...`;
 
       try {
         const res = await fetch('/api/submissions', {
@@ -469,19 +541,22 @@ function initFormEvents() {
 
         if (result.success) {
           const padded = String(studentNo).padStart(2, '0');
-          const msg = `✅ ${escapeHtml(result.message)}（班级: ${escapeHtml(className)}，学号: ${padded}号，文件: ${escapeHtml(file.name)}）`;
+          const fileSummary = (result.data && result.data.originalName) || selectedFiles.map(f => f.name).join('、');
+          const totalSize = selectedFiles.reduce((sum, f) => sum + f.size, 0);
+          const msg = `✅ ${escapeHtml(result.message)}（班级: ${escapeHtml(className)}，学号: ${padded}号，文件: ${escapeHtml(fileSummary)}）`;
           showNotice('success', msg);
 
           saveLocalHistory({
             className,
             studentNo: padded,
-            fileName: file.name,
-            fileSize: formatBytes(file.size),
+            fileName: selectedFiles.length > 1 ? `${selectedFiles[0].name} 等 ${selectedFiles.length} 个文件` : selectedFiles[0].name,
+            fileSize: formatBytes(totalSize),
             time: new Date().toLocaleTimeString('zh-CN', { hour12: false })
           });
 
+          selectedFiles = [];
           fileInput.value = '';
-          fileInfo.style.display = 'none';
+          renderSelectedFiles();
           document.getElementById('note').value = '';
 
           // Immediately refresh personal status and live broadcast wall

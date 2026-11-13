@@ -162,14 +162,16 @@
               </label>
               <div class="dropzone" id="materialDropzone">
                 <div class="dropzone-icon">📁</div>
-                <div class="dropzone-text">点击选择文件，或将要发给学生的文件拖拽到此处</div>
-                <div class="dropzone-sub">支持课件PPT、PDF、Word文档、Python代码、Scratch案例、压缩包等各种格式</div>
-                <input type="file" id="materialFileInput" required>
+                <div class="dropzone-text">点击选择文件，或将要发给学生的文件拖拽到此处（支持多选）</div>
+                <div class="dropzone-sub">支持课件PPT、PDF、Word文档、Python代码、Scratch案例、压缩包等各种格式，可一次发布多个文件</div>
+                <input type="file" id="materialFileInput" multiple>
               </div>
-              <div id="materialFileInfo" style="display: none;" class="selected-file-badge">
-                <span>📄 已选文件:</span>
-                <span id="materialFileName"></span>
-                <span id="materialFileSize" style="color: var(--text-muted); font-size: 12px;"></span>
+              <div id="materialFileInfo" style="display: none;" class="selected-file-list">
+                <div class="selected-file-header">
+                  <span id="materialFileCountLabel">📄 已选 0 个文件</span>
+                  <button type="button" class="btn-link-clear" id="btnClearMaterialFiles">清空重选</button>
+                </div>
+                <div id="materialFileListItems" class="selected-file-items"></div>
               </div>
             </div>
 
