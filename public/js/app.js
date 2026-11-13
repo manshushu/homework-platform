@@ -31,11 +31,9 @@ let selectedFiles = [];
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
   localStorage.removeItem('last_student_name');
-  initServerInfo();
   loadMaterials();
   loadClasses();
   initFormEvents();
-  renderLocalHistory();
   loadBroadcastState();
   setInterval(loadBroadcastState, 3000);
 });
@@ -459,11 +457,52 @@ function initFormEvents() {
     });
   }
 
-  // Prevent browser from opening dropped files outside dropzone
-  document.addEventListener('dragover', (e) => e.preventDefault());
-  document.addEventListener('drop', (e) => e.preventDefault());
+  // Full-window drag & drop support so students can drop files anywhere in the browser window
+  const globalOverlay = document.getElementById('globalDropOverlay');
+  let dragCounter = 0;
 
-  // Drag and drop handlers
+  function hasDraggedFiles(e) {
+    const dt = e.dataTransfer;
+    if (!dt) return false;
+    if (dt.types && Array.from(dt.types).includes('Files')) return true;
+    return dt.files && dt.files.length > 0;
+  }
+
+  window.addEventListener('dragenter', (e) => {
+    if (!hasDraggedFiles(e)) return;
+    e.preventDefault();
+    dragCounter++;
+    if (globalOverlay) globalOverlay.style.display = 'flex';
+  });
+
+  window.addEventListener('dragover', (e) => {
+    if (!hasDraggedFiles(e)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  });
+
+  window.addEventListener('dragleave', (e) => {
+    if (!hasDraggedFiles(e)) return;
+    e.preventDefault();
+    dragCounter = Math.max(0, dragCounter - 1);
+    if (dragCounter === 0 && globalOverlay) {
+      globalOverlay.style.display = 'none';
+    }
+  });
+
+  window.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dragCounter = 0;
+    if (globalOverlay) globalOverlay.style.display = 'none';
+    if (dropzone) dropzone.classList.remove('dragover');
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      appendFiles(e.dataTransfer.files);
+      const btnSubmit = document.getElementById('btnSubmit');
+      if (btnSubmit) btnSubmit.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  });
+
+  // Drag and drop handlers for the dropzone card
   if (dropzone) {
     dropzone.addEventListener('click', () => {
       if (fileInput) fileInput.click();
@@ -472,7 +511,6 @@ function initFormEvents() {
     ['dragenter', 'dragover'].forEach(eventName => {
       dropzone.addEventListener(eventName, (e) => {
         e.preventDefault();
-        e.stopPropagation();
         dropzone.classList.add('dragover');
       }, false);
     });
@@ -480,17 +518,8 @@ function initFormEvents() {
     ['dragleave', 'drop'].forEach(eventName => {
       dropzone.addEventListener(eventName, (e) => {
         e.preventDefault();
-        e.stopPropagation();
         dropzone.classList.remove('dragover');
       }, false);
-    });
-
-    dropzone.addEventListener('drop', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-        appendFiles(e.dataTransfer.files);
-      }
     });
   }
 
@@ -569,7 +598,7 @@ function initFormEvents() {
         showNotice('error', '网络异常或服务未响应，请检查局域网连接');
       } finally {
         btnSubmit.disabled = false;
-        btnSubmitText.textContent = '🚀 确认提交作业';
+        btnSubmitText.textContent = '🚀 提交作业';
       }
     });
   }

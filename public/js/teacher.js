@@ -30,6 +30,8 @@ let currentMissingList = [];
 let currentClassSummary = null;
 let broadcastState = { active: false, className: '' };
 let activeTab = 'submissions';
+let lastSubmissionsSignature = '';
+let teacherEventSource = null;
 
 // Redirect back to login screen whenever any teacher API returns 401
 const nativeFetch = window.fetch.bind(window);
@@ -49,17 +51,47 @@ document.addEventListener('DOMContentLoaded', () => {
   initClassesManagement();
   initMaterialsManagement();
   initSubmissionsManagement();
+  initTeacherRealtimeSync();
 
-  // Auto-refresh submissions & broadcast state every 5 seconds while viewing submissions tab
+  // Fallback silent sync every 10 seconds while viewing submissions tab
   setInterval(() => {
     if (activeTab === 'submissions') {
       loadBroadcastState();
-      if (broadcastState.active) {
-        loadSubmissions(true);
-      }
+      loadSubmissions(true);
     }
-  }, 5000);
+  }, 10000);
 });
+
+function initTeacherRealtimeSync() {
+  const badge = document.getElementById('realtimeSyncBadge');
+  const textEl = document.getElementById('realtimeSyncText');
+  if (typeof EventSource === 'undefined') return;
+
+  if (teacherEventSource) {
+    try { teacherEventSource.close(); } catch (e) {}
+  }
+
+  teacherEventSource = new EventSource('/api/teacher/events');
+
+  teacherEventSource.addEventListener('connected', () => {
+    if (badge) badge.style.opacity = '1';
+    if (textEl) textEl.textContent = '实时同步中';
+  });
+
+  teacherEventSource.addEventListener('submissions_updated', () => {
+    if (activeTab === 'submissions') {
+      loadSubmissions(true);
+    }
+  });
+
+  teacherEventSource.addEventListener('broadcast_updated', () => {
+    loadBroadcastState();
+  });
+
+  teacherEventSource.onerror = () => {
+    if (textEl) textEl.textContent = '重连中...';
+  };
+}
 
 // 1. Server Info
 async function initServerInfo() {
@@ -350,8 +382,16 @@ async function loadSubmissions(silent = false) {
     currentClassSummary = (sumJson && sumJson.success) ? sumJson.data : null;
 
     if (subJson.success && subJson.data) {
+      const nextSig = JSON.stringify({
+        filter: selectedClass,
+        items: subJson.data.map(s => [s.id, s.updated_at, s.file_size, s.original_name]),
+        missing: sumJson && sumJson.data ? sumJson.data.missingCount : -1
+      });
       cachedSubmissions = subJson.data;
-      renderSubmissionsTable();
+      if (!silent || nextSig !== lastSubmissionsSignature) {
+        lastSubmissionsSignature = nextSig;
+        renderSubmissionsTable();
+      }
     }
   } catch (err) {
     if (!silent && tbody) {
