@@ -12,3 +12,4 @@ storage/logs/
 *.tmp
 .DS_Store
 Thumbs.db
+server/data/roster.json

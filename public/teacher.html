@@ -34,6 +34,7 @@
     <!-- Navigation Tabs -->
     <div class="tabs-bar">
       <button class="tab-btn active" data-tab="submissions">📥 学生作业收取与导出</button>
+      <button class="tab-btn" data-tab="summary">📊 学生提交汇总</button>
       <button class="tab-btn" data-tab="materials">📤 发布作业与学习资料</button>
       <button class="tab-btn" data-tab="classes">⚙️ 班级设置与名单</button>
     </div>
@@ -58,28 +59,53 @@
 
       <!-- Filter and Action Bar -->
       <div class="card" style="margin-bottom: 20px;">
-        <div class="card-body" style="padding: 16px 20px; display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between;">
-          <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
-            <label style="font-weight: 600; font-size: 14px;">筛选班级:</label>
-            <select id="filterClassSelect" class="form-select" style="width: 190px; padding: 7px 12px;">
-              <option value="">全部班级</option>
-            </select>
+        <div class="card-body" style="padding: 16px 20px; display: flex; flex-direction: column; gap: 12px;">
+          <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;">
+            <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+              <label style="font-weight: 600; font-size: 14px;">筛选班级:</label>
+              <select id="filterClassSelect" class="form-select" style="width: 190px; padding: 7px 12px;">
+                <option value="">全部班级</option>
+              </select>
 
-            <input type="text" id="searchKeyword" class="form-input" placeholder="按学号或姓名搜索..." style="width: 180px; padding: 7px 12px;">
+              <input type="text" id="searchKeyword" class="form-input" placeholder="按学号或姓名搜索..." style="width: 180px; padding: 7px 12px;">
 
-            <button type="button" class="btn btn-outline btn-sm" id="btnRefreshSubmissions">
-              🔄 刷新
-            </button>
-            <span id="realtimeSyncBadge" class="live-pill" title="学生提交作业后将自动实时刷新" style="font-size: 12px;">
-              <span class="live-dot"></span>
-              <span id="realtimeSyncText">实时同步中</span>
-            </span>
+              <button type="button" class="btn btn-outline btn-sm" id="btnRefreshSubmissions">
+                🔄 刷新
+              </button>
+              <span id="realtimeSyncBadge" class="live-pill" title="学生提交作业后将自动实时刷新" style="font-size: 12px;">
+                <span class="live-dot"></span>
+                <span id="realtimeSyncText">实时同步中</span>
+              </span>
+            </div>
+
+            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+              <button type="button" class="btn btn-success" id="btnExportZip">
+                📦 一键打包下载当前筛选 (ZIP)
+              </button>
+              <button type="button" class="btn btn-outline btn-sm" id="btnBatchDelete" style="color: #dc2626; border-color: #fecaca;">
+                🗑️ 批量清理当前筛选
+              </button>
+            </div>
           </div>
 
-          <div style="display: flex; gap: 10px;">
-            <button type="button" class="btn btn-success" id="btnExportZip">
-              📦 一键打包下载当前班级作业 (ZIP)
-            </button>
+          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-top: 1px solid #f1f5f9; padding-top: 10px;">
+            <label style="font-weight: 600; font-size: 13px; color: #475569;">时间范围:</label>
+            <div class="time-scope-group" id="timeScopeGroup">
+              <button type="button" class="time-scope-btn active" data-scope="today">今天</button>
+              <button type="button" class="time-scope-btn" data-scope="week">本周</button>
+              <button type="button" class="time-scope-btn" data-scope="date">指定日期</button>
+              <button type="button" class="time-scope-btn" data-scope="week_picker">指定周次</button>
+              <button type="button" class="time-scope-btn" data-scope="custom">自定义时间段</button>
+              <button type="button" class="time-scope-btn" data-scope="all">全部历史</button>
+            </div>
+            <input type="date" id="filterDateInput" class="form-input" style="display: none; width: 155px; padding: 5px 10px; font-size: 13px;">
+            <input type="week" id="filterWeekInput" class="form-input" style="display: none; width: 170px; padding: 5px 10px; font-size: 13px;">
+            <div id="filterCustomRange" style="display: none; align-items: center; gap: 6px;">
+              <input type="date" id="filterStartDate" class="form-input" style="width: 145px; padding: 5px 10px; font-size: 13px;">
+              <span style="color: #64748b; font-size: 13px;">~</span>
+              <input type="date" id="filterEndDate" class="form-input" style="width: 145px; padding: 5px 10px; font-size: 13px;">
+            </div>
+            <span id="timeRangeBadge" class="time-range-pill">今天</span>
           </div>
         </div>
       </div>
@@ -331,7 +357,160 @@
       </div>
     </div>
 
+    <!-- Tab 4: Student Submission Summary -->
+    <div id="tabSummary" class="tab-content hidden">
+      <div class="card" style="margin-bottom: 20px;">
+        <div class="card-body" style="padding: 16px 20px; display: flex; flex-direction: column; gap: 12px;">
+          <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;">
+            <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+              <label style="font-weight: 600; font-size: 14px;">筛选班级:</label>
+              <select id="summaryClassSelect" class="form-select" style="width: 190px; padding: 7px 12px;">
+                <option value="">全部班级</option>
+              </select>
+
+              <select id="summaryStatusFilter" class="form-select" style="width: 135px; padding: 7px 12px;">
+                <option value="all">全部状态</option>
+                <option value="submitted">仅看已提交</option>
+                <option value="unsubmitted">仅看未提交</option>
+              </select>
+
+              <input type="text" id="summarySearchKeyword" class="form-input" placeholder="按学号或姓名搜索..." style="width: 180px; padding: 7px 12px;">
+
+              <button type="button" class="btn btn-outline btn-sm" id="btnRefreshSummary">
+                🔄 刷新
+              </button>
+            </div>
+
+            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+              <button type="button" class="btn btn-primary" id="btnExportSummaryExcel">
+                📥 导出汇总表 (.xlsx)
+              </button>
+              <button type="button" class="btn btn-success" id="btnSummaryExportZip">
+                📦 按此范围打包 ZIP
+              </button>
+            </div>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-top: 1px solid #f1f5f9; padding-top: 10px;">
+            <label style="font-weight: 600; font-size: 13px; color: #475569;">统计范围:</label>
+            <div class="time-scope-group" id="summaryTimeScopeGroup">
+              <button type="button" class="time-scope-btn" data-scope="today">今天</button>
+              <button type="button" class="time-scope-btn" data-scope="week">本周</button>
+              <button type="button" class="time-scope-btn" data-scope="date">指定日期</button>
+              <button type="button" class="time-scope-btn" data-scope="week_picker">指定周次</button>
+              <button type="button" class="time-scope-btn" data-scope="custom">自定义时间段</button>
+              <button type="button" class="time-scope-btn active" data-scope="all">全部历史</button>
+            </div>
+            <input type="date" id="summaryDateInput" class="form-input" style="display: none; width: 155px; padding: 5px 10px; font-size: 13px;">
+            <input type="week" id="summaryWeekInput" class="form-input" style="display: none; width: 170px; padding: 5px 10px; font-size: 13px;">
+            <div id="summaryCustomRange" style="display: none; align-items: center; gap: 6px;">
+              <input type="date" id="summaryStartDate" class="form-input" style="width: 145px; padding: 5px 10px; font-size: 13px;">
+              <span style="color: #64748b; font-size: 13px;">~</span>
+              <input type="date" id="summaryEndDate" class="form-input" style="width: 145px; padding: 5px 10px; font-size: 13px;">
+            </div>
+            <span id="summaryTimeRangeBadge" class="time-range-pill">全部历史</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="stats-row" style="grid-template-columns: repeat(4, minmax(0, 1fr));">
+        <div class="stat-card">
+          <div class="stat-label">应交总人数</div>
+          <div class="stat-num" id="sumStatTotalStudents" style="color: #475569;">0 人</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">已提交人数</div>
+          <div class="stat-num" id="sumStatSubmittedStudents" style="color: #059669;">0 人</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">未提交人数</div>
+          <div class="stat-num" id="sumStatUnsubmittedStudents" style="color: #ea580c;">0 人</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">累计提交份数</div>
+          <div class="stat-num" id="sumStatTotalSubmissions">0 份</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">📊 每位同学作业提交汇总记录</div>
+          <span id="summaryTableMeta" style="font-size: 12px; color: var(--text-muted);"></span>
+        </div>
+        <div class="card-body" style="padding: 0;">
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th style="width: 130px;">班级</th>
+                  <th style="width: 75px;">学号</th>
+                  <th style="width: 100px;">姓名</th>
+                  <th style="width: 95px;">状态</th>
+                  <th style="width: 90px;">提交份数</th>
+                  <th style="width: 90px;">提交天数</th>
+                  <th style="width: 165px;">最近提交时间</th>
+                  <th>提交文件明细</th>
+                </tr>
+              </thead>
+              <tbody id="summaryTableBody">
+                <tr>
+                  <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 40px;">
+                    正在加载学生提交汇总...
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </main>
+
+  <!-- ZIP Export Confirmation Modal -->
+  <div id="exportZipModal" class="modal-backdrop hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title">📦 打包下载学生作业 (ZIP)</div>
+        <button type="button" class="modal-close" id="btnCloseExportModal" aria-label="关闭">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label" for="exportModalClass">导出班级</label>
+          <select id="exportModalClass" class="form-select">
+            <option value="">全部班级</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">选择时间范围</label>
+          <div class="time-scope-group" id="exportModalScopeGroup" style="margin-bottom: 10px;">
+            <button type="button" class="time-scope-btn" data-scope="today">今天</button>
+            <button type="button" class="time-scope-btn" data-scope="week">本周</button>
+            <button type="button" class="time-scope-btn" data-scope="date">指定日期</button>
+            <button type="button" class="time-scope-btn" data-scope="week_picker">指定周次</button>
+            <button type="button" class="time-scope-btn" data-scope="custom">自定义时间段</button>
+            <button type="button" class="time-scope-btn" data-scope="all">全部历史</button>
+          </div>
+          <input type="date" id="exportModalDate" class="form-input" style="display: none;">
+          <input type="week" id="exportModalWeek" class="form-input" style="display: none;">
+          <div id="exportModalCustomRange" style="display: none; align-items: center; gap: 8px;">
+            <input type="date" id="exportModalStartDate" class="form-input">
+            <span style="color: #64748b;">~</span>
+            <input type="date" id="exportModalEndDate" class="form-input">
+          </div>
+        </div>
+
+        <div class="modal-tip">
+          💡 导出的 ZIP 压缩包根目录会自动附带《<strong>作业提交汇总_时间范围.xlsx</strong>》，标明班级、统计时间范围、打包时间及每位同学的提交份数、天数与未交状态。
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline" id="btnCancelExportModal">取消</button>
+        <button type="button" class="btn btn-success" id="btnConfirmExportZip">📦 确认打包下载</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Footer -->
   <footer class="app-footer">

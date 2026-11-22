@@ -32,6 +32,98 @@ let broadcastState = { active: false, className: '' };
 let activeTab = 'submissions';
 let lastSubmissionsSignature = '';
 let teacherEventSource = null;
+let currentTimeScope = 'today';
+
+function getTodayDateString() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function getCurrentIsoWeekString() {
+  const now = new Date();
+  const date = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dayNum = date.getDay() || 7;
+  date.setDate(date.getDate() + 4 - dayNum);
+  const yearStart = new Date(date.getFullYear(), 0, 1);
+  const weekNo = Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+  return `${date.getFullYear()}-W${String(weekNo).padStart(2, '0')}`;
+}
+
+function buildTimeQueryFromState(scope, inputs = {}) {
+  const qs = new URLSearchParams();
+  if (scope === 'date') {
+    qs.set('scope', 'date');
+    qs.set('date', inputs.date || getTodayDateString());
+    return qs.toString();
+  }
+  if (scope === 'week_picker') {
+    qs.set('scope', 'week');
+    qs.set('week', inputs.week || getCurrentIsoWeekString());
+    return qs.toString();
+  }
+  if (scope === 'week') {
+    qs.set('scope', 'week');
+    qs.set('week', getCurrentIsoWeekString());
+    return qs.toString();
+  }
+  if (scope === 'custom') {
+    const start = inputs.startDate || getTodayDateString();
+    const end = inputs.endDate || start;
+    qs.set('scope', 'custom');
+    qs.set('start_date', start <= end ? start : end);
+    qs.set('end_date', start <= end ? end : start);
+    return qs.toString();
+  }
+  if (scope === 'all') {
+    qs.set('scope', 'all');
+    return qs.toString();
+  }
+  qs.set('scope', 'today');
+  return qs.toString();
+}
+
+function getTimeFilterParams() {
+  const dateInput = document.getElementById('filterDateInput');
+  const weekInput = document.getElementById('filterWeekInput');
+  const startInput = document.getElementById('filterStartDate');
+  const endInput = document.getElementById('filterEndDate');
+  if (currentTimeScope === 'date') {
+    return { scope: 'date', date: (dateInput && dateInput.value) || getTodayDateString() };
+  }
+  if (currentTimeScope === 'week_picker') {
+    return { scope: 'week', week: (weekInput && weekInput.value) || getCurrentIsoWeekString() };
+  }
+  if (currentTimeScope === 'week') {
+    return { scope: 'week', week: getCurrentIsoWeekString() };
+  }
+  if (currentTimeScope === 'custom') {
+    const start = (startInput && startInput.value) || getTodayDateString();
+    const end = (endInput && endInput.value) || start;
+    return {
+      scope: 'custom',
+      start_date: start <= end ? start : end,
+      end_date: start <= end ? end : start
+    };
+  }
+  if (currentTimeScope === 'all') {
+    return { scope: 'all' };
+  }
+  return { scope: 'today' };
+}
+
+function buildTimeQueryString() {
+  const p = getTimeFilterParams();
+  const qs = new URLSearchParams();
+  qs.set('scope', p.scope);
+  if (p.date) qs.set('date', p.date);
+  if (p.week) qs.set('week', p.week);
+  if (p.start_date) qs.set('start_date', p.start_date);
+  if (p.end_date) qs.set('end_date', p.end_date);
+  return qs.toString();
+}
 
 // Redirect back to login screen whenever any teacher API returns 401
 const nativeFetch = window.fetch.bind(window);
@@ -51,6 +143,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initClassesManagement();
   initMaterialsManagement();
   initSubmissionsManagement();
+  initStudentSummaryTab();
+  initExportZipModal();
   initTeacherRealtimeSync();
 
   // Fallback silent sync every 10 seconds while viewing submissions tab
@@ -81,6 +175,8 @@ function initTeacherRealtimeSync() {
   teacherEventSource.addEventListener('submissions_updated', () => {
     if (activeTab === 'submissions') {
       loadSubmissions(true);
+    } else if (activeTab === 'summary') {
+      loadStudentSummary(true);
     }
   });
 
@@ -118,11 +214,13 @@ function initTabs() {
       const targetId = tab.dataset.tab;
       activeTab = targetId;
       document.getElementById('tabSubmissions').style.display = targetId === 'submissions' ? 'block' : 'none';
+      document.getElementById('tabSummary').style.display = targetId === 'summary' ? 'block' : 'none';
       document.getElementById('tabMaterials').style.display = targetId === 'materials' ? 'block' : 'none';
       document.getElementById('tabClasses').style.display = targetId === 'classes' ? 'block' : 'none';
 
       if (targetId === 'materials') loadMaterialsList();
       if (targetId === 'classes') loadClassesList();
+      if (targetId === 'summary') loadStudentSummary();
       if (targetId === 'submissions') {
         loadSubmissions();
         loadBroadcastState();
@@ -137,10 +235,76 @@ function initSubmissionsManagement() {
   const searchKeyword = document.getElementById('searchKeyword');
   const btnRefresh = document.getElementById('btnRefreshSubmissions');
   const btnExportZip = document.getElementById('btnExportZip');
+  const btnBatchDelete = document.getElementById('btnBatchDelete');
   const btnCopyMissing = document.getElementById('btnCopyMissing');
   const btnToggleBroadcast = document.getElementById('btnToggleBroadcast');
   const btnGlobalStopBroadcast = document.getElementById('btnGlobalStopBroadcast');
   const btnSwitchBroadcastClass = document.getElementById('btnSwitchBroadcastClass');
+  const timeScopeGroup = document.getElementById('timeScopeGroup');
+  const filterDateInput = document.getElementById('filterDateInput');
+  const filterWeekInput = document.getElementById('filterWeekInput');
+  const filterCustomRange = document.getElementById('filterCustomRange');
+  const filterStartDate = document.getElementById('filterStartDate');
+  const filterEndDate = document.getElementById('filterEndDate');
+
+  if (filterDateInput && !filterDateInput.value) {
+    filterDateInput.value = getTodayDateString();
+  }
+  if (filterWeekInput && !filterWeekInput.value) {
+    filterWeekInput.value = getCurrentIsoWeekString();
+  }
+  if (filterStartDate && !filterStartDate.value) {
+    filterStartDate.value = getTodayDateString();
+  }
+  if (filterEndDate && !filterEndDate.value) {
+    filterEndDate.value = getTodayDateString();
+  }
+
+  if (timeScopeGroup) {
+    timeScopeGroup.querySelectorAll('.time-scope-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const scope = btn.dataset.scope || 'today';
+        currentTimeScope = scope;
+        timeScopeGroup.querySelectorAll('.time-scope-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+
+        if (filterDateInput) {
+          filterDateInput.style.display = scope === 'date' ? 'inline-block' : 'none';
+        }
+        if (filterWeekInput) {
+          filterWeekInput.style.display = scope === 'week_picker' ? 'inline-block' : 'none';
+        }
+        if (filterCustomRange) {
+          filterCustomRange.style.display = scope === 'custom' ? 'flex' : 'none';
+        }
+        loadSubmissions();
+      });
+    });
+  }
+
+  if (filterDateInput) {
+    filterDateInput.addEventListener('change', () => {
+      if (currentTimeScope === 'date') loadSubmissions();
+    });
+  }
+
+  if (filterWeekInput) {
+    filterWeekInput.addEventListener('change', () => {
+      if (currentTimeScope === 'week_picker') loadSubmissions();
+    });
+  }
+
+  if (filterStartDate) {
+    filterStartDate.addEventListener('change', () => {
+      if (currentTimeScope === 'custom') loadSubmissions();
+    });
+  }
+
+  if (filterEndDate) {
+    filterEndDate.addEventListener('change', () => {
+      if (currentTimeScope === 'custom') loadSubmissions();
+    });
+  }
 
   if (filterSelect) {
     filterSelect.addEventListener('change', () => {
@@ -164,8 +328,62 @@ function initSubmissionsManagement() {
   if (btnExportZip) {
     btnExportZip.addEventListener('click', () => {
       const selectedClass = filterSelect ? filterSelect.value : '';
-      const url = `/api/submissions/export-zip?class_name=${encodeURIComponent(selectedClass)}`;
-      window.location.href = url;
+      openExportZipModal({
+        className: selectedClass,
+        scope: currentTimeScope,
+        date: filterDateInput?.value || getTodayDateString(),
+        week: filterWeekInput?.value || getCurrentIsoWeekString(),
+        startDate: filterStartDate?.value || getTodayDateString(),
+        endDate: filterEndDate?.value || getTodayDateString()
+      });
+    });
+  }
+
+  if (btnBatchDelete) {
+    btnBatchDelete.addEventListener('click', async () => {
+      const selectedClass = filterSelect ? filterSelect.value : '';
+      const keyword = (searchKeyword?.value || '').trim();
+      const rangeLabel = document.getElementById('timeRangeBadge')?.textContent || '当前范围';
+      const classLabel = selectedClass || '全部班级';
+      const count = cachedSubmissions.length;
+      if (count === 0) {
+        alert('当前筛选范围内没有可清理的作业记录。');
+        return;
+      }
+
+      const firstConfirm = confirm(
+        `确定要批量清理以下范围内的作业记录和磁盘文件吗？\n\n` +
+        `班级：${classLabel}\n` +
+        `时间范围：${rangeLabel}\n` +
+        (keyword ? `关键词：${keyword}\n` : '') +
+        `\n此操作不可恢复！`
+      );
+      if (!firstConfirm) return;
+
+      const secondConfirm = confirm(`再次确认：将永久删除【${classLabel} / ${rangeLabel}】下符合条件的作业文件，是否继续？`);
+      if (!secondConfirm) return;
+
+      try {
+        const res = await fetch('/api/submissions/batch-delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            class_name: selectedClass,
+            keyword,
+            ...getTimeFilterParams()
+          })
+        });
+        const json = await res.json();
+        if (json.success) {
+          alert(json.message || `已清理 ${json.deletedCount} 条作业记录`);
+          loadSubmissions();
+          loadBroadcastState();
+        } else {
+          alert(json.message || '批量清理失败');
+        }
+      } catch (err) {
+        alert('批量清理请求失败，请检查网络');
+      }
     });
   }
 
@@ -223,7 +441,10 @@ async function startBroadcast(className) {
     const res = await fetch('/api/broadcast/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ class_name: className })
+      body: JSON.stringify({
+        class_name: className,
+        ...getTimeFilterParams()
+      })
     });
     const json = await res.json();
     if (json.success) {
@@ -279,7 +500,8 @@ function renderActiveBroadcastBar() {
   }
 
   bar.style.display = 'flex';
-  textEl.textContent = `正在向所有学生端实时广播：【${broadcastState.className}】未交学号（已交 ${broadcastState.submittedCount}/${broadcastState.totalCount}，未交 ${broadcastState.missingCount} 人）`;
+  const rangeNote = broadcastState.rangeLabel ? `（${broadcastState.rangeLabel}）` : '';
+  textEl.textContent = `正在向所有学生端实时广播：【${broadcastState.className}】${rangeNote}未交学号（已交 ${broadcastState.submittedCount}/${broadcastState.totalCount}，未交 ${broadcastState.missingCount} 人）`;
   if (switchBtn) {
     switchBtn.style.display = filterClass === broadcastState.className ? 'none' : 'inline-flex';
   }
@@ -302,6 +524,49 @@ function renderBroadcastButtons() {
   }
 }
 
+function populateClassSelect(selectEl, classes) {
+  if (!selectEl) return;
+  const currentVal = selectEl.value;
+  selectEl.innerHTML = '<option value="">全部班级</option>';
+
+  const gradeGroups = {
+    '六年级': [],
+    '七年级': [],
+    '八年级': [],
+    '其他班级': []
+  };
+
+  classes.forEach(cls => {
+    if (cls.name.startsWith('六年级')) {
+      gradeGroups['六年级'].push(cls);
+    } else if (cls.name.startsWith('七年级')) {
+      gradeGroups['七年级'].push(cls);
+    } else if (cls.name.startsWith('八年级')) {
+      gradeGroups['八年级'].push(cls);
+    } else {
+      gradeGroups['其他班级'].push(cls);
+    }
+  });
+
+  for (const [grade, items] of Object.entries(gradeGroups)) {
+    if (items.length > 0) {
+      const groupEl = document.createElement('optgroup');
+      groupEl.label = `--- ${grade} (${items.length}个班) ---`;
+      items.forEach(cls => {
+        const opt = document.createElement('option');
+        opt.value = cls.name;
+        opt.textContent = `${cls.name} (${cls.roster_count || cls.max_student_no || 45}人)`;
+        groupEl.appendChild(opt);
+      });
+      selectEl.appendChild(groupEl);
+    }
+  }
+
+  if (currentVal && classes.some(c => c.name === currentVal)) {
+    selectEl.value = currentVal;
+  }
+}
+
 async function loadClassesForFilter() {
   const filterSelect = document.getElementById('filterClassSelect');
   if (!filterSelect) return;
@@ -311,45 +576,9 @@ async function loadClassesForFilter() {
     const json = await res.json();
     if (json.success && json.data) {
       cachedClasses = json.data;
-      const currentVal = filterSelect.value;
-      filterSelect.innerHTML = '<option value="">全部班级</option>';
-
-      const gradeGroups = {
-        '六年级': [],
-        '七年级': [],
-        '八年级': [],
-        '其他班级': []
-      };
-
-      cachedClasses.forEach(cls => {
-        if (cls.name.startsWith('六年级')) {
-          gradeGroups['六年级'].push(cls);
-        } else if (cls.name.startsWith('七年级')) {
-          gradeGroups['七年级'].push(cls);
-        } else if (cls.name.startsWith('八年级')) {
-          gradeGroups['八年级'].push(cls);
-        } else {
-          gradeGroups['其他班级'].push(cls);
-        }
-      });
-
-      for (const [grade, items] of Object.entries(gradeGroups)) {
-        if (items.length > 0) {
-          const groupEl = document.createElement('optgroup');
-          groupEl.label = `--- ${grade} (${items.length}个班) ---`;
-          items.forEach(cls => {
-            const opt = document.createElement('option');
-            opt.value = cls.name;
-            opt.textContent = `${cls.name} (${cls.roster_count || cls.max_student_no || 45}人)`;
-            groupEl.appendChild(opt);
-          });
-          filterSelect.appendChild(groupEl);
-        }
-      }
-
-      if (currentVal && cachedClasses.some(c => c.name === currentVal)) {
-        filterSelect.value = currentVal;
-      }
+      populateClassSelect(filterSelect, cachedClasses);
+      populateClassSelect(document.getElementById('summaryClassSelect'), cachedClasses);
+      populateClassSelect(document.getElementById('exportModalClass'), cachedClasses);
     }
   } catch (e) {
     console.error('加载班级筛选失败:', e);
@@ -371,9 +600,10 @@ async function loadSubmissions(silent = false) {
   }
 
   try {
-    const reqs = [fetch(`/api/submissions?class_name=${encodeURIComponent(selectedClass)}`)];
+    const timeQs = buildTimeQueryString();
+    const reqs = [fetch(`/api/submissions?class_name=${encodeURIComponent(selectedClass)}&${timeQs}`)];
     if (selectedClass) {
-      reqs.push(fetch(`/api/teacher/class-summary?class_name=${encodeURIComponent(selectedClass)}`));
+      reqs.push(fetch(`/api/teacher/class-summary?class_name=${encodeURIComponent(selectedClass)}&${timeQs}`));
     }
     const responses = await Promise.all(reqs);
     const subJson = await responses[0].json();
@@ -381,9 +611,15 @@ async function loadSubmissions(silent = false) {
 
     currentClassSummary = (sumJson && sumJson.success) ? sumJson.data : null;
 
+    const rangeBadge = document.getElementById('timeRangeBadge');
+    if (rangeBadge && subJson.range && subJson.range.label) {
+      rangeBadge.textContent = subJson.range.label;
+    }
+
     if (subJson.success && subJson.data) {
       const nextSig = JSON.stringify({
         filter: selectedClass,
+        time: timeQs,
         items: subJson.data.map(s => [s.id, s.updated_at, s.file_size, s.original_name]),
         missing: sumJson && sumJson.data ? sumJson.data.missingCount : -1
       });
@@ -1045,6 +1281,261 @@ function initTeacherSecurity() {
       } catch (err) {
         showPasswordNotice('error', '网络异常，修改失败');
       }
+    });
+  }
+}
+
+// 6. Student Submission Summary Tab
+let summaryTimeScope = 'all';
+let cachedSummaryRecords = [];
+
+function getSummaryTimeQueryString() {
+  return buildTimeQueryFromState(summaryTimeScope, {
+    date: document.getElementById('summaryDateInput')?.value,
+    week: document.getElementById('summaryWeekInput')?.value,
+    startDate: document.getElementById('summaryStartDate')?.value,
+    endDate: document.getElementById('summaryEndDate')?.value
+  });
+}
+
+function initStudentSummaryTab() {
+  const classSelect = document.getElementById('summaryClassSelect');
+  const statusFilter = document.getElementById('summaryStatusFilter');
+  const searchInput = document.getElementById('summarySearchKeyword');
+  const btnRefresh = document.getElementById('btnRefreshSummary');
+  const btnExportExcel = document.getElementById('btnExportSummaryExcel');
+  const btnExportZip = document.getElementById('btnSummaryExportZip');
+  const scopeGroup = document.getElementById('summaryTimeScopeGroup');
+  const dateInput = document.getElementById('summaryDateInput');
+  const weekInput = document.getElementById('summaryWeekInput');
+  const customRange = document.getElementById('summaryCustomRange');
+  const startInput = document.getElementById('summaryStartDate');
+  const endInput = document.getElementById('summaryEndDate');
+
+  if (dateInput && !dateInput.value) dateInput.value = getTodayDateString();
+  if (weekInput && !weekInput.value) weekInput.value = getCurrentIsoWeekString();
+  if (startInput && !startInput.value) startInput.value = getTodayDateString();
+  if (endInput && !endInput.value) endInput.value = getTodayDateString();
+
+  if (scopeGroup) {
+    scopeGroup.querySelectorAll('.time-scope-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const scope = btn.dataset.scope || 'all';
+        summaryTimeScope = scope;
+        scopeGroup.querySelectorAll('.time-scope-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        if (dateInput) dateInput.style.display = scope === 'date' ? 'inline-block' : 'none';
+        if (weekInput) weekInput.style.display = scope === 'week_picker' ? 'inline-block' : 'none';
+        if (customRange) customRange.style.display = scope === 'custom' ? 'flex' : 'none';
+        loadStudentSummary();
+      });
+    });
+  }
+
+  if (dateInput) dateInput.addEventListener('change', () => { if (summaryTimeScope === 'date') loadStudentSummary(); });
+  if (weekInput) weekInput.addEventListener('change', () => { if (summaryTimeScope === 'week_picker') loadStudentSummary(); });
+  if (startInput) startInput.addEventListener('change', () => { if (summaryTimeScope === 'custom') loadStudentSummary(); });
+  if (endInput) endInput.addEventListener('change', () => { if (summaryTimeScope === 'custom') loadStudentSummary(); });
+  if (classSelect) classSelect.addEventListener('change', () => loadStudentSummary());
+  if (statusFilter) statusFilter.addEventListener('change', () => renderStudentSummaryTable());
+  if (searchInput) searchInput.addEventListener('input', () => renderStudentSummaryTable());
+  if (btnRefresh) btnRefresh.addEventListener('click', () => loadStudentSummary());
+
+  if (btnExportExcel) {
+    btnExportExcel.addEventListener('click', () => {
+      const cls = classSelect ? classSelect.value : '';
+      const timeQs = getSummaryTimeQueryString();
+      window.location.href = `/api/teacher/student-summary/export?class_name=${encodeURIComponent(cls)}&${timeQs}`;
+    });
+  }
+
+  if (btnExportZip) {
+    btnExportZip.addEventListener('click', () => {
+      openExportZipModal({
+        className: classSelect ? classSelect.value : '',
+        scope: summaryTimeScope,
+        date: dateInput?.value || getTodayDateString(),
+        week: weekInput?.value || getCurrentIsoWeekString(),
+        startDate: startInput?.value || getTodayDateString(),
+        endDate: endInput?.value || getTodayDateString()
+      });
+    });
+  }
+}
+
+async function loadStudentSummary(silent = false) {
+  const classSelect = document.getElementById('summaryClassSelect');
+  const selectedClass = classSelect ? classSelect.value : '';
+  const tbody = document.getElementById('summaryTableBody');
+  if (!silent && tbody) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 40px;">正在加载汇总数据...</td></tr>';
+  }
+
+  try {
+    const timeQs = getSummaryTimeQueryString();
+    const res = await fetch(`/api/teacher/student-summary?class_name=${encodeURIComponent(selectedClass)}&${timeQs}`);
+    const json = await res.json();
+    if (json.success && json.data) {
+      const { stats, records } = json.data;
+      cachedSummaryRecords = Array.isArray(records) ? records : [];
+
+      const badge = document.getElementById('summaryTimeRangeBadge');
+      if (badge && json.range && json.range.label) {
+        badge.textContent = json.range.label;
+      }
+
+      const elTotal = document.getElementById('sumStatTotalStudents');
+      const elSub = document.getElementById('sumStatSubmittedStudents');
+      const elUnsub = document.getElementById('sumStatUnsubmittedStudents');
+      const elCount = document.getElementById('sumStatTotalSubmissions');
+      if (elTotal) elTotal.textContent = `${stats.totalStudents || 0} 人`;
+      if (elSub) elSub.textContent = `${stats.submittedStudents || 0} 人`;
+      if (elUnsub) elUnsub.textContent = `${stats.unsubmittedStudents || 0} 人`;
+      if (elCount) elCount.textContent = `${stats.totalSubmissions || 0} 份`;
+
+      renderStudentSummaryTable();
+    }
+  } catch (err) {
+    console.error('加载学生提交汇总失败:', err);
+    if (!silent && tbody) {
+      tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #dc2626; padding: 30px;">加载失败，请刷新重试</td></tr>';
+    }
+  }
+}
+
+function renderStudentSummaryTable() {
+  const tbody = document.getElementById('summaryTableBody');
+  const metaEl = document.getElementById('summaryTableMeta');
+  if (!tbody) return;
+
+  const statusFilter = document.getElementById('summaryStatusFilter')?.value || 'all';
+  const keyword = (document.getElementById('summarySearchKeyword')?.value || '').trim().toLowerCase();
+
+  let filtered = cachedSummaryRecords;
+  if (statusFilter === 'submitted') {
+    filtered = filtered.filter(r => r.submitted);
+  } else if (statusFilter === 'unsubmitted') {
+    filtered = filtered.filter(r => !r.submitted);
+  }
+
+  if (keyword) {
+    filtered = filtered.filter(r => {
+      const noStr = String(r.student_no);
+      const nameStr = (r.student_name || '').toLowerCase();
+      const clsStr = (r.class_name || '').toLowerCase();
+      return noStr.includes(keyword) || nameStr.includes(keyword) || clsStr.includes(keyword);
+    });
+  }
+
+  if (metaEl) {
+    metaEl.textContent = `当前显示 ${filtered.length} / ${cachedSummaryRecords.length} 条记录`;
+  }
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 40px;">暂无符合条件的学生记录</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = filtered.map(r => {
+    const noText = `${String(r.student_no).padStart(2, '0')}号`;
+    const statusBadge = r.submitted
+      ? '<span class="badge badge-green">已提交</span>'
+      : '<span class="badge badge-orange">未提交</span>';
+    const fileListHtml = Array.isArray(r.files) && r.files.length > 0
+      ? r.files.map(f => `<span class="badge badge-gray" style="margin: 2px 4px 2px 0;" title="${escapeHtml(f.submitted_at)}">${escapeHtml(f.original_name)}</span>`).join('')
+      : '<span style="color: var(--text-muted);">-</span>';
+
+    return `
+      <tr>
+        <td><span class="badge badge-blue">${escapeHtml(r.class_name)}</span></td>
+        <td><strong>${escapeHtml(noText)}</strong></td>
+        <td>${escapeHtml(r.student_name || '-')}</td>
+        <td>${statusBadge}</td>
+        <td><strong>${r.submission_count}</strong></td>
+        <td>${r.submitted_days}</td>
+        <td style="font-size: 12px; color: var(--text-muted);">${r.latest_submitted_at ? escapeHtml(formatDate(r.latest_submitted_at)) : '-'}</td>
+        <td style="max-width: 340px;">${fileListHtml}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+// 7. ZIP Export Modal
+let exportModalScope = 'today';
+
+function updateExportModalInputs() {
+  const scopeGroup = document.getElementById('exportModalScopeGroup');
+  const dateInput = document.getElementById('exportModalDate');
+  const weekInput = document.getElementById('exportModalWeek');
+  const customRange = document.getElementById('exportModalCustomRange');
+
+  if (scopeGroup) {
+    scopeGroup.querySelectorAll('.time-scope-btn').forEach(btn => {
+      btn.classList.toggle('active', (btn.dataset.scope || '') === exportModalScope);
+    });
+  }
+  if (dateInput) dateInput.style.display = exportModalScope === 'date' ? 'block' : 'none';
+  if (weekInput) weekInput.style.display = exportModalScope === 'week_picker' ? 'block' : 'none';
+  if (customRange) customRange.style.display = exportModalScope === 'custom' ? 'flex' : 'none';
+}
+
+function openExportZipModal(initial = {}) {
+  const modal = document.getElementById('exportZipModal');
+  if (!modal) return;
+
+  const classSelect = document.getElementById('exportModalClass');
+  const dateInput = document.getElementById('exportModalDate');
+  const weekInput = document.getElementById('exportModalWeek');
+  const startInput = document.getElementById('exportModalStartDate');
+  const endInput = document.getElementById('exportModalEndDate');
+
+  if (classSelect) classSelect.value = initial.className || '';
+  exportModalScope = initial.scope || 'today';
+  if (dateInput) dateInput.value = initial.date || getTodayDateString();
+  if (weekInput) weekInput.value = initial.week || getCurrentIsoWeekString();
+  if (startInput) startInput.value = initial.startDate || getTodayDateString();
+  if (endInput) endInput.value = initial.endDate || getTodayDateString();
+
+  updateExportModalInputs();
+  modal.classList.remove('hidden');
+}
+
+function initExportZipModal() {
+  const modal = document.getElementById('exportZipModal');
+  if (!modal) return;
+
+  const btnClose = document.getElementById('btnCloseExportModal');
+  const btnCancel = document.getElementById('btnCancelExportModal');
+  const btnConfirm = document.getElementById('btnConfirmExportZip');
+  const scopeGroup = document.getElementById('exportModalScopeGroup');
+
+  const closeModal = () => modal.classList.add('hidden');
+  if (btnClose) btnClose.addEventListener('click', closeModal);
+  if (btnCancel) btnCancel.addEventListener('click', closeModal);
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) closeModal();
+  });
+
+  if (scopeGroup) {
+    scopeGroup.querySelectorAll('.time-scope-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        exportModalScope = btn.dataset.scope || 'today';
+        updateExportModalInputs();
+      });
+    });
+  }
+
+  if (btnConfirm) {
+    btnConfirm.addEventListener('click', () => {
+      const selectedClass = document.getElementById('exportModalClass')?.value || '';
+      const timeQs = buildTimeQueryFromState(exportModalScope, {
+        date: document.getElementById('exportModalDate')?.value,
+        week: document.getElementById('exportModalWeek')?.value,
+        startDate: document.getElementById('exportModalStartDate')?.value,
+        endDate: document.getElementById('exportModalEndDate')?.value
+      });
+      closeModal();
+      window.location.href = `/api/submissions/export-zip?class_name=${encodeURIComponent(selectedClass)}&${timeQs}`;
     });
   }
 }

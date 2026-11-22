@@ -53,11 +53,12 @@ function Ensure-ScheduledTask {
 
     try {
         $action = New-ScheduledTaskAction -Execute $RunBat -WorkingDirectory (Split-Path -Parent $RunBat)
-        $trigger = New-ScheduledTaskTrigger -AtStartup
+        $triggerStartup = New-ScheduledTaskTrigger -AtStartup
+        $triggerWatchdog = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1)
         $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
-        Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-        Write-Host "已成功注册开机自启后台服务 ($TaskName)。" -ForegroundColor Green
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+        Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($triggerStartup, $triggerWatchdog) -Principal $principal -Settings $settings -Force | Out-Null
+        Write-Host "已成功注册开机自启+每分钟巡检保活服务 ($TaskName)。" -ForegroundColor Green
         return $true
     } catch {
         Write-Host "注册计划任务失败: $($_.Exception.Message)" -ForegroundColor Red

@@ -6,7 +6,13 @@ const multer = require('multer');
 const AdmZip = require('adm-zip');
 const { getLocalIpAddresses } = require('../utils/ipHelper');
 const { parseRosterBuffer } = require('../utils/rosterParser');
+const {
+  resolveDateRange,
+  formatLocalDateTime,
+  formatTimestampForFilename
+} = require('../utils/dateRange');
 const auth = require('../utils/auth');
+const { buildStudentSummaryWorkbook } = require('../utils/summaryExcel');
 const db = require('../db');
 
 // Helper to decode Chinese filenames properly from multer
@@ -23,6 +29,18 @@ function decodeOriginalName(originalname) {
 }
 
 const teacherSseClients = new Set();
+
+function notifyPetServer({ className, studentNo, fileCount, isUpdate }) {
+  const petBaseUrl = process.env.PET_SERVER_URL || 'http://127.0.0.1:3001';
+  fetch(`${petBaseUrl}/api/internal/homework-reward`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ className, studentNo, fileCount, isUpdate }),
+    signal: AbortSignal.timeout(1500)
+  }).catch(() => {
+    // 宠物服务未启动或不可达时静默忽略，确保不影响学生正常交作业
+  });
+}
 
 function notifyTeacherClients(eventName, payload = {}) {
   if (teacherSseClients.size === 0) return;
@@ -95,11 +113,14 @@ function normalizeStudentOriginalName(rawOriginalName, studentNo, studentName) {
   return `${base}${ext}`;
 }
 
-function buildFormattedSubmissionFilename(studentNo, studentName, cleanOriginalName) {
+function buildFormattedSubmissionFilename(studentNo, studentName, cleanOriginalName, timestampStr = '') {
   const paddedNo = String(studentNo).padStart(2, '0');
   const safeName = sanitizeFilenamePart(studentName || '');
   const namePart = safeName ? `_${safeName}` : '';
-  return `${paddedNo}号${namePart}_${cleanOriginalName}`;
+  const ext = path.extname(cleanOriginalName);
+  const base = path.basename(cleanOriginalName, ext);
+  const tsPart = timestampStr ? `_${timestampStr}` : '';
+  return `${paddedNo}号${namePart}_${base}${tsPart}${ext}`;
 }
 
 function cleanupUploadedFiles(files) {
@@ -309,12 +330,21 @@ router.get('/broadcast', (req, res) => {
     if (!state.active || !state.className) {
       return res.json({ success: true, data: { active: false } });
     }
-    const summary = db.getClassSubmissionSummary(state.className, false);
+    const dateRange = resolveDateRange({
+      scope: state.scope,
+      date: state.date,
+      week: state.week,
+      start_date: state.startDate,
+      end_date: state.endDate
+    }, 'today');
+    const summary = db.getClassSubmissionSummary(state.className, false, dateRange);
     res.json({
       success: true,
       data: {
         active: true,
         updatedAt: state.updatedAt,
+        scope: dateRange.scope,
+        rangeLabel: state.rangeLabel || dateRange.label,
         ...summary
       }
     });
@@ -357,8 +387,18 @@ router.post('/broadcast/start', auth.requireTeacherAuth, (req, res) => {
     if (!cls) {
       return res.status(404).json({ success: false, message: '未找到指定班级' });
     }
-    const state = db.setBroadcastState({ active: true, className });
-    notifyTeacherClients('broadcast_updated', { active: true, className });
+    const dateRange = resolveDateRange(req.body, 'today');
+    const state = db.setBroadcastState({
+      active: true,
+      className,
+      scope: dateRange.scope,
+      date: req.body.date || '',
+      week: dateRange.week || req.body.week || '',
+      startDate: dateRange.startDate || '',
+      endDate: dateRange.endDate || '',
+      rangeLabel: dateRange.label
+    });
+    notifyTeacherClients('broadcast_updated', { active: true, className, rangeLabel: dateRange.label });
     res.json({ success: true, data: state, message: `已开启【${className}】未交学号广播` });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -375,7 +415,7 @@ router.post('/broadcast/stop', auth.requireTeacherAuth, (req, res) => {
   }
 });
 
-// Student-safe personal submission status check (strictly NO names)
+// Student-safe personal submission status check (strictly NO names, defaults to today)
 router.get('/submission-status', (req, res) => {
   try {
     const className = (req.query.class_name || '').trim();
@@ -383,7 +423,8 @@ router.get('/submission-status', (req, res) => {
     if (!className || !studentNo || isNaN(studentNo) || studentNo <= 0) {
       return res.json({ success: true, data: { submitted: false } });
     }
-    const status = db.getSingleSubmissionStatus(className, studentNo);
+    const todayRange = resolveDateRange(req.query, 'today');
+    const status = db.getSingleSubmissionStatus(className, studentNo, todayRange);
     res.json({ success: true, data: status });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -397,10 +438,58 @@ router.get('/teacher/class-summary', auth.requireTeacherAuth, (req, res) => {
     if (!className) {
       return res.status(400).json({ success: false, message: '缺少班级参数' });
     }
-    const summary = db.getClassSubmissionSummary(className, true);
+    const dateRange = resolveDateRange(req.query, 'all');
+    const summary = db.getClassSubmissionSummary(className, true, dateRange);
     res.json({ success: true, data: summary });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Teacher-only per-student submission summary across selected class & time range
+router.get('/teacher/student-summary', auth.requireTeacherAuth, (req, res) => {
+  try {
+    const className = (req.query.class_name || '').trim();
+    const dateRange = resolveDateRange(req.query, 'all');
+    const summary = db.getStudentSubmissionSummary(className, dateRange);
+    res.json({
+      success: true,
+      data: {
+        stats: summary.stats,
+        records: summary.records
+      },
+      range: dateRange
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Export per-student submission summary as standalone Excel (.xlsx)
+router.get('/teacher/student-summary/export', auth.requireTeacherAuth, (req, res) => {
+  try {
+    const className = (req.query.class_name || '').trim();
+    const dateRange = resolveDateRange(req.query, 'all');
+    const summary = db.getStudentSubmissionSummary(className, dateRange);
+    const xlsxBuffer = buildStudentSummaryWorkbook({
+      className,
+      dateRange,
+      stats: summary.stats,
+      records: summary.records,
+      submissions: summary.submissions,
+      historicalSubmissions: summary.historicalSubmissions
+    });
+    const targetLabel = sanitizeFilenamePart(className || '全部班级');
+    const rangeTag = sanitizeFilenamePart(dateRange.fileTag || formatTimestampForFilename(new Date()).slice(0, 8));
+    const downloadName = `${targetLabel}_提交汇总_${rangeTag}.xlsx`;
+    const encodedName = encodeURIComponent(downloadName);
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodedName}"; filename*=UTF-8''${encodedName}`);
+    res.end(xlsxBuffer);
+  } catch (err) {
+    console.error('导出汇总表失败:', err);
+    res.status(500).send('导出汇总表失败: ' + err.message);
   }
 });
 
@@ -487,8 +576,9 @@ router.delete('/materials/:id', auth.requireTeacherAuth, (req, res) => {
 router.get('/submissions', auth.requireTeacherAuth, (req, res) => {
   try {
     const { class_name } = req.query;
-    const list = db.getSubmissions(class_name);
-    res.json({ success: true, data: list });
+    const dateRange = resolveDateRange(req.query, 'all');
+    const list = db.getSubmissions(class_name, dateRange);
+    res.json({ success: true, data: list, range: dateRange });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -533,15 +623,28 @@ router.post('/submissions', uploadSubmissionFields, (req, res) => {
 
     const paddedNo = String(studentNo).padStart(2, '0');
     const ipAddress = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').replace('::ffff:', '');
-    let updateCount = 0;
+    const now = new Date();
+    const submittedAt = formatLocalDateTime(now);
+    const tsTag = formatTimestampForFilename(now);
     const savedFiles = [];
 
     for (const file of uploadedFiles) {
       const rawOriginalName = decodeOriginalName(file.originalname);
       const cleanOriginalName = normalizeStudentOriginalName(rawOriginalName, studentNo, studentName);
-      const formattedStoredName = buildFormattedSubmissionFilename(studentNo, studentName, cleanOriginalName);
+      let formattedStoredName = buildFormattedSubmissionFilename(studentNo, studentName, cleanOriginalName, tsTag);
       let finalFilePath = path.join(safeClassDir, formattedStoredName);
       let finalStoredName = formattedStoredName;
+
+      if (fs.existsSync(finalFilePath)) {
+        const ext = path.extname(formattedStoredName);
+        const base = path.basename(formattedStoredName, ext);
+        let seq = 2;
+        while (fs.existsSync(path.join(safeClassDir, `${base}_${seq}${ext}`))) {
+          seq++;
+        }
+        finalStoredName = `${base}_${seq}${ext}`;
+        finalFilePath = path.join(safeClassDir, finalStoredName);
+      }
 
       if (file.path !== finalFilePath) {
         try {
@@ -562,37 +665,35 @@ router.post('/submissions', uploadSubmissionFields, (req, res) => {
         storedName: finalStoredName,
         filePath: finalFilePath,
         fileSize: file.size,
-        ipAddress
+        ipAddress,
+        submittedAt
       });
 
-      if (result.isUpdate) updateCount++;
       savedFiles.push({
         id: result.id,
         originalName: cleanOriginalName,
         storedName: finalStoredName,
         fileSize: file.size,
-        isUpdate: result.isUpdate
+        isUpdate: false
       });
     }
 
     const totalCount = savedFiles.length;
-    let msg;
-    if (totalCount === 1) {
-      msg = updateCount === 1
-        ? `学号 ${paddedNo} 号已有同名作业，已成功为您覆盖更新！`
-        : `提交成功！学号 ${paddedNo} 号作业已收到。`;
-    } else if (updateCount === 0) {
-      msg = `提交成功！学号 ${paddedNo} 号共收到 ${totalCount} 个作业文件。`;
-    } else if (updateCount === totalCount) {
-      msg = `学号 ${paddedNo} 号的 ${totalCount} 个同名作业文件已全部覆盖更新！`;
-    } else {
-      msg = `成功提交 ${totalCount} 个文件（其中 ${updateCount} 个同名文件已覆盖更新）。`;
-    }
+    const msg = totalCount === 1
+      ? `提交成功！学号 ${paddedNo} 号作业已收到（已自动附加时间戳保存）。`
+      : `提交成功！学号 ${paddedNo} 号共收到 ${totalCount} 个作业文件（已自动附加时间戳保存）。`;
 
     notifyTeacherClients('submissions_updated', {
       className,
       studentNo,
       count: savedFiles.length
+    });
+
+    notifyPetServer({
+      className,
+      studentNo,
+      fileCount: savedFiles.length,
+      isUpdate: false
     });
 
     // Strictly NO studentName returned to student client
@@ -627,7 +728,8 @@ router.get('/submissions/download/:id', auth.requireTeacherAuth, (req, res) => {
       return res.status(404).send('作业文件不存在或已被删除');
     }
     const cleanOrig = normalizeStudentOriginalName(item.original_name, item.student_no, item.student_name);
-    const formattedName = buildFormattedSubmissionFilename(item.student_no, item.student_name, cleanOrig);
+    const tsTag = formatTimestampForFilename(item.submitted_at || item.updated_at);
+    const formattedName = buildFormattedSubmissionFilename(item.student_no, item.student_name, cleanOrig, tsTag);
     const downloadName = `${sanitizeFilenamePart(item.class_name)}_${formattedName}`;
     const encodedName = encodeURIComponent(downloadName);
 
@@ -649,13 +751,32 @@ router.delete('/submissions/:id', auth.requireTeacherAuth, (req, res) => {
   }
 });
 
+router.post('/submissions/batch-delete', auth.requireTeacherAuth, (req, res) => {
+  try {
+    const className = (req.body.class_name || '').trim();
+    const keyword = (req.body.keyword || '').trim();
+    const dateRange = resolveDateRange(req.body, 'all');
+    const result = db.deleteSubmissionsBatch({ className, dateRange, keyword });
+    notifyTeacherClients('submissions_updated', { batchDeleted: result.deletedCount });
+    res.json({
+      success: true,
+      deletedCount: result.deletedCount,
+      message: `已清理 ${result.deletedCount} 条作业记录`
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // One-click batch ZIP export
 router.get('/submissions/export-zip', auth.requireTeacherAuth, (req, res) => {
   try {
     const { class_name } = req.query;
-    const submissions = db.getSubmissions(class_name);
+    const dateRange = resolveDateRange(req.query, 'all');
+    const submissions = db.getSubmissions(class_name, dateRange);
+    const summaryData = db.getStudentSubmissionSummary(class_name || '', dateRange);
 
-    if (!submissions || submissions.length === 0) {
+    if ((!submissions || submissions.length === 0) && summaryData.stats.totalSubmissions === 0) {
       return res.status(400).send('当前选定范围内暂无任何已提交作业');
     }
 
@@ -667,9 +788,10 @@ router.get('/submissions/export-zip', auth.requireTeacherAuth, (req, res) => {
       if (sub.file_path && fs.existsSync(sub.file_path)) {
         const safeClass = sanitizeFilenamePart(sub.class_name || '未分班');
         const cleanOrig = normalizeStudentOriginalName(sub.original_name, sub.student_no, sub.student_name);
-        let inZipFileName = buildFormattedSubmissionFilename(sub.student_no, sub.student_name, cleanOrig);
+        const tsTag = formatTimestampForFilename(sub.submitted_at || sub.updated_at);
+        let inZipFileName = buildFormattedSubmissionFilename(sub.student_no, sub.student_name, cleanOrig, tsTag);
 
-        // Guard against duplicate entry names inside ZIP if legacy dirty filenames normalize to the same name
+        // Guard against duplicate entry names inside ZIP
         let entryKey = `${safeClass}/${inZipFileName}`.toLowerCase();
         if (usedZipEntries.has(entryKey)) {
           const ext = path.extname(inZipFileName);
@@ -688,15 +810,24 @@ router.get('/submissions/export-zip', auth.requireTeacherAuth, (req, res) => {
       }
     }
 
-    if (fileCount === 0) {
+    if (fileCount === 0 && summaryData.stats.totalSubmissions === 0) {
       return res.status(400).send('未在磁盘中找到有效的作业文件');
     }
 
+    const rangeTag = sanitizeFilenamePart(dateRange.fileTag || formatTimestampForFilename(new Date()).slice(0, 8));
+    const summaryBuffer = buildStudentSummaryWorkbook({
+      className: class_name || '',
+      dateRange,
+      stats: summaryData.stats,
+      records: summaryData.records,
+      submissions: summaryData.submissions,
+      historicalSubmissions: summaryData.historicalSubmissions
+    });
+    zip.addFile(`作业提交汇总_${rangeTag}.xlsx`, summaryBuffer);
+
     const zipBuffer = zip.toBuffer();
-    const now = new Date();
-    const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
     const targetLabel = sanitizeFilenamePart(class_name || '全部班级作业');
-    const downloadZipName = `${targetLabel}_${dateStr}.zip`;
+    const downloadZipName = `${targetLabel}_${rangeTag}.zip`;
     const encodedName = encodeURIComponent(downloadZipName);
 
     res.setHeader('Content-Type', 'application/zip');

@@ -207,20 +207,28 @@ async function runTests() {
     const subRes2 = await request('POST', '/api/submissions', { headers: sub2.headers, body: sub2.body });
     assert(subRes2.statusCode === 200 && subRes2.json.success && subRes2.json.data.files.length === 3, '学生一次上传 3 个文件成功');
 
-    // 5. Verify submission list & disk filenames
+    // 5. Verify submission list & disk filenames (non-overwrite with timestamp)
     const listRes = await request('GET', `/api/submissions?class_name=${encodeURIComponent(testClassName)}`, {
       headers: { Cookie: teacherCookie }
     });
-    assert(listRes.statusCode === 200 && listRes.json.data.length === 3, '同学生不同名保留、同名覆盖后共 3 条记录');
+    assert(listRes.statusCode === 200 && listRes.json.data.length === 4, '同学生同名重交带时间戳保留，共 4 条记录');
     listRes.json.data.forEach(item => createdSubmissionIds.push(item.id));
 
-    const sb3Row = listRes.json.data.find(r => r.original_name === '智能小车.sb3');
-    assert(!!sb3Row && sb3Row.stored_name === '08号_李小华_智能小车.sb3', `磁盘文件名规范整洁 (${sb3Row && sb3Row.stored_name})`);
-    assert(sb3Row && fs.existsSync(sb3Row.file_path) && fs.readFileSync(sb3Row.file_path, 'utf8') === 'SB3_V2', '覆盖更新后磁盘文件内容为最新版');
+    const sb3Rows = listRes.json.data.filter(r => r.original_name === '智能小车.sb3');
+    assert(sb3Rows.length === 2, '两次提交的同名文件均保留');
+    assert(
+      sb3Rows.every(r => /^08号_李小华_智能小车_\d{8}_\d{6}(?:_\d+)?\.sb3$/.test(r.stored_name)),
+      `磁盘文件名规范整洁并附带时间戳 (${sb3Rows.map(r => r.stored_name).join(', ')})`
+    );
+    assert(
+      sb3Rows.some(r => fs.existsSync(r.file_path) && fs.readFileSync(r.file_path, 'utf8') === 'SB3_V1') &&
+      sb3Rows.some(r => fs.existsSync(r.file_path) && fs.readFileSync(r.file_path, 'utf8') === 'SB3_V2'),
+      '两次提交的磁盘文件内容均完整保留'
+    );
 
     // 6. Verify student status endpoint returns multi-file details without student name
     const statusRes = await request('GET', `/api/submission-status?class_name=${encodeURIComponent(testClassName)}&student_no=8`);
-    assert(statusRes.statusCode === 200 && statusRes.json.data.submitted && statusRes.json.data.fileCount === 3, '学生端个人状态返回已交 3 个文件');
+    assert(statusRes.statusCode === 200 && statusRes.json.data.submitted && statusRes.json.data.fileCount === 4, '学生端个人状态返回今日已交 4 个文件');
     assert(!statusRes.text.includes('李小华'), '学生端状态接口严格不泄露学生姓名');
 
     // 7. Verify ZIP export naming
@@ -230,13 +238,14 @@ async function runTests() {
     assert(zipRes.statusCode === 200, '导出 ZIP 成功');
     const zip = new AdmZip(zipRes.buffer);
     const entryNames = zip.getEntries().map(e => e.entryName);
+    const submissionEntries = entryNames.filter(name => !name.endsWith('.xlsx'));
+    const summaryEntries = entryNames.filter(name => /^作业提交汇总_.*\.xlsx$/.test(name));
     console.log('ZIP 内文件列表:', entryNames);
-    assert(entryNames.length === 3, 'ZIP 内包含全部 3 个文件');
+    assert(summaryEntries.length === 1, 'ZIP 内附带 1 份作业提交汇总 Excel');
+    assert(submissionEntries.length === 4, 'ZIP 内包含全部 4 个作业文件');
     assert(
-      entryNames.includes(`${testClassName}/08号_李小华_智能小车.sb3`) &&
-      entryNames.includes(`${testClassName}/08号_李小华_运行截图.png`) &&
-      entryNames.includes(`${testClassName}/08号_李小华_实验报告.docx`),
-      'ZIP 内文件命名全部规整为 08号_李小华_原文件名.后缀'
+      submissionEntries.every(name => new RegExp(`^${testClassName}/08号_李小华_.+_\\d{8}_\\d{6}(?:_\\d+)?\\.(sb3|png|docx)$`).test(name)),
+      'ZIP 内文件命名全部规整为 08号_李小华_原文件名_时间戳.后缀'
     );
   } finally {
     for (const id of createdSubmissionIds) {

@@ -257,18 +257,18 @@ async function checkMySubmissionStatus() {
         .join('、');
       statusBox.innerHTML = `
         <div>
-          <strong>✅ ${escapeHtml(className)} ${padded}号 已交 ${files.length} 个文件</strong>
+          <strong>✅ ${escapeHtml(className)} ${padded}号 今日已交 ${files.length} 个文件</strong>
           <div style="font-size: 12px; margin-top: 2px;">
-            已交文件：${filesText} · 更新时间：${escapeHtml(formatDate(data.updatedAt))}
+            已交文件：${filesText} · 提交时间：${escapeHtml(formatDate(data.updatedAt))}
           </div>
         </div>
-        <span class="badge badge-green">重交同名覆盖 / 新名保留</span>
+        <span class="badge badge-green">重交自动加时间戳保留</span>
       `;
     } else {
       statusBox.className = 'personal-status-box status-unsubmitted';
       statusBox.innerHTML = `
         <div>
-          <strong>⏳ ${escapeHtml(className)} ${padded}号 尚未提交作业</strong>
+          <strong>⏳ ${escapeHtml(className)} ${padded}号 今日尚未提交作业</strong>
           <div style="font-size: 12px; margin-top: 2px;">请在下方选择作业文件并点击“确认提交作业”</div>
         </div>
         <span class="badge" style="background:#fef3c7; color:#b45309;">待提交</span>
@@ -312,7 +312,8 @@ function renderBroadcastBanner() {
   const myNo = parseInt(document.getElementById('studentNoSelect')?.value || '0', 10);
   const isSameClass = myClass && myClass === data.className;
 
-  titleEl.textContent = `📢 教师正在广播：【${data.className}】未交作业情况`;
+  const rangeText = data.rangeLabel ? `（${data.rangeLabel}）` : '';
+  titleEl.textContent = `📢 教师正在广播：【${data.className}】${rangeText}未交作业情况`;
   statsEl.innerHTML = `
     <span class="badge badge-green">已交 ${data.submittedCount} / ${data.totalCount} 人</span>
     <span class="badge" style="background:#fee2e2; color:#991b1b;">未交 ${data.missingCount} 人</span>

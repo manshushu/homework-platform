@@ -2,6 +2,13 @@
 $AppDir = Split-Path -Parent $PSScriptRoot
 Set-Location $AppDir
 
+# Single-instance watchdog mutex so 1-minute scheduled task checks never spawn duplicates
+$createdNew = $false
+$mutex = New-Object System.Threading.Mutex($true, 'Global\HomeworkPlatformWatchdogMutex', [ref]$createdNew)
+if (-not $createdNew) {
+    exit 0
+}
+
 $LogDir = Join-Path $AppDir 'storage\logs'
 if (-not (Test-Path $LogDir)) {
     New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
@@ -23,34 +30,81 @@ function Rotate-Log($path, $maxBytes) {
     }
 }
 
-Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue | ForEach-Object {
-    if ($_.CommandLine -and $_.CommandLine -like "*server*index.js*") {
-        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+function Stop-OrphanNode {
+    Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($_.CommandLine -and $_.CommandLine -like "*server*index.js*") {
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
-$nodeCmd = (Get-Command node.exe -ErrorAction SilentlyContinue).Source
-if (-not $nodeCmd) {
-    $nodeCmd = 'C:\Program Files\nodejs\node.exe'
+function Test-ServerHealthy {
+    try {
+        $resp = Invoke-RestMethod -Uri 'http://127.0.0.1:3000/api/info' -TimeoutSec 5 -ErrorAction Stop
+        return ($null -ne $resp -and $resp.success -eq $true)
+    } catch {
+        return $false
+    }
 }
 
-Write-SvcLog "Watchdog started. AppDir=$AppDir Node=$nodeCmd"
+try {
+    Stop-OrphanNode
 
-while ($true) {
-    Rotate-Log $ServiceLog 5MB
-    Rotate-Log $OutLog 10MB
-    Rotate-Log $ErrLog 10MB
+    $nodeCmd = (Get-Command node.exe -ErrorAction SilentlyContinue).Source
+    if (-not $nodeCmd) {
+        $nodeCmd = 'C:\Program Files\nodejs\node.exe'
+    }
 
-    Write-SvcLog "Starting server\index.js..."
-    $proc = Start-Process -FilePath $nodeCmd `
-        -ArgumentList 'server\index.js' `
-        -WorkingDirectory $AppDir `
-        -WindowStyle Hidden `
-        -RedirectStandardOutput $OutLog `
-        -RedirectStandardError $ErrLog `
-        -PassThru
+    Write-SvcLog "Watchdog started with HTTP health check. AppDir=$AppDir Node=$nodeCmd"
 
-    $proc.WaitForExit()
-    Write-SvcLog "node.exe exited with code $($proc.ExitCode). Restarting in 3s..."
-    Start-Sleep -Seconds 3
+    while ($true) {
+        Rotate-Log $ServiceLog 5MB
+        Rotate-Log $OutLog 10MB
+        Rotate-Log $ErrLog 10MB
+
+        Write-SvcLog "Starting server\index.js..."
+        $proc = Start-Process -FilePath $nodeCmd `
+            -ArgumentList 'server\index.js' `
+            -WorkingDirectory $AppDir `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $OutLog `
+            -RedirectStandardError $ErrLog `
+            -PassThru
+
+        # Startup grace period before probing HTTP
+        $failCount = 0
+        $graceRemaining = 15
+        while (-not $proc.HasExited -and $graceRemaining -gt 0) {
+            Start-Sleep -Seconds 3
+            $graceRemaining -= 3
+        }
+
+        while (-not $proc.HasExited) {
+            Start-Sleep -Seconds 15
+            if ($proc.HasExited) { break }
+
+            if (Test-ServerHealthy) {
+                $failCount = 0
+            } else {
+                $failCount++
+                Write-SvcLog "Health check failed ($failCount/3) on http://127.0.0.1:3000/api/info"
+                if ($failCount -ge 3) {
+                    Write-SvcLog "Server unresponsive for 3 consecutive checks. Killing PID $($proc.Id) to restart..."
+                    try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+                    Stop-OrphanNode
+                    break
+                }
+            }
+        }
+
+        if ($proc.HasExited) {
+            Write-SvcLog "node.exe exited with code $($proc.ExitCode). Restarting in 3s..."
+        } else {
+            Write-SvcLog "Restarting unresponsive server in 3s..."
+        }
+        Start-Sleep -Seconds 3
+    }
+} finally {
+    try { $mutex.ReleaseMutex() } catch {}
+    try { $mutex.Dispose() } catch {}
 }

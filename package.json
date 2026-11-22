@@ -1,6 +1,6 @@
 {
   "name": "homework-platform",
-  "version": "1.0.0",
+  "version": "1.4.0",
   "description": "中小学课堂作业收发平台",
   "main": "server/index.js",
   "scripts": {
